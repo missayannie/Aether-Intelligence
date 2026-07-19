@@ -1,0 +1,414 @@
+{
+ "Item": {
+  "fields": {
+   "BaseParamValue[0]": 60,
+   "BaseParamValue[1]": 62,
+   "BaseParamValue[2]": 64,
+   "BaseParamValue[3]": 66,
+   "BaseParamValue[4]": 1,
+   "BaseParamValue[5]": 70,
+   "BaseParam[0]": 59,
+   "BaseParam[1]": 61,
+   "BaseParam[2]": 63,
+   "BaseParam[3]": 65,
+   "BaseParam[4]": 1,
+   "BaseParam[5]": 69,
+   "CanBeHq": 27,
+   "ClassJobCategory": 43,
+   "DamageMag": 52,
+   "DamagePhys": 51,
+   "DefenseMag": 58,
+   "DefensePhys": 57,
+   "Description": 8,
+   "EquipSlotCategory": 17,
+   "Icon": 10,
+   "IsUntradable": 22,
+   "ItemUICategory": 15,
+   "LevelEquip": 40,
+   "LevelItem": 11,
+   "MateriaSlotCount": 86,
+   "Name": 9,
+   "PriceLow": 26,
+   "PriceMid": 25,
+   "Rarity": 12,
+   "StackSize": 20
+  },
+  "variant": 1
+ },
+ "BaseParam": {
+  "fields": {
+   "Name": 1
+  },
+  "variant": 1
+ },
+ "GatheringType": {
+  "fields": {
+   "Name": 0
+  },
+  "variant": 1
+ },
+ "GatheringSubCategory": {
+  "fields": {
+   "FolkloreBook": 5,
+   "Item": 4
+  },
+  "variant": 1
+ },
+ "PlaceName": {
+  "fields": {
+   "Name": 0
+  },
+  "variant": 1
+ },
+ "Map": {
+  "fields": {
+   "Id": 6,
+   "MapMarkerRange": 5,
+   "OffsetX": 8,
+   "OffsetY": 9,
+   "PlaceName": 11,
+   "PlaceNameRegion": 10,
+   "PlaceNameSub": 12,
+   "SizeFactor": 7,
+   "TerritoryType": 16
+  },
+  "variant": 1
+ },
+ "TerritoryType": {
+  "fields": {
+   "Aetheryte": 24,
+   "Map": 6,
+   "Name": 0,
+   "PlaceName": 5,
+   "PlaceNameRegion": 3
+  },
+  "variant": 1
+ },
+ "Aetheryte": {
+  "fields": {
+   "AethernetName": 9,
+   "IsAetheryte": 15,
+   "Map": 21,
+   "PlaceName": 8,
+   "Territory": 10
+  },
+  "variant": 1
+ },
+ "ClassJob": {
+  "fields": {
+   "Abbreviation": 1,
+   "Name": 0
+  },
+  "variant": 1
+ },
+ "ClassJobCategory": {
+  "fields": {
+   "Name": 0
+  },
+  "variant": 1
+ },
+ "ItemUICategory": {
+  "fields": {
+   "Name": 0
+  },
+  "variant": 1
+ },
+ "EquipSlotCategory": {
+  "fields": {
+   "Body": 3,
+   "Ears": 8,
+   "Feet": 7,
+   "FingerL": 11,
+   "FingerR": 11,
+   "Gloves": 4,
+   "Head": 2,
+   "Legs": 6,
+   "MainHand": 0,
+   "Neck": 9,
+   "OffHand": 1,
+   "Waist": 5,
+   "Wrists": 10
+  },
+  "variant": 1
+ },
+ "GatheringItem": {
+  "fields": {
+   "GatheringItemLevel": 1,
+   "IsHidden": 6,
+   "Item": 0
+  },
+  "variant": 1
+ },
+ "GatheringPointBase": {
+  "fields": {
+   "GatheringLevel": 1,
+   "GatheringType": 0,
+   "Item[0]": 2,
+   "Item[1]": 3,
+   "Item[2]": 4,
+   "Item[3]": 5,
+   "Item[4]": 6,
+   "Item[5]": 7,
+   "Item[6]": 8,
+   "Item[7]": 9
+  },
+  "variant": 1
+ },
+ "GatheringPoint": {
+  "fields": {
+   "GatheringPointBase": 3,
+   "PlaceName": 8,
+   "TerritoryType": 7
+  },
+  "variant": 1
+ },
+ "ExportedGatheringPoint": {
+  "fields": {
+   "GatheringType": 2,
+   "Radius": 4,
+   "X": 0,
+   "Y": 1
+  },
+  "variant": 1
+ },
+ "GatheringPointTransient": {
+  "fields": {
+   "EphemeralEndTime": 1,
+   "EphemeralStartTime": 0,
+   "GatheringRarePopTimeTable": 2
+  },
+  "variant": 1
+ },
+ "GatheringRarePopTimeTable": {
+  "fields": {
+   "Duration[0]": 1,
+   "Duration[1]": 3,
+   "Duration[2]": 5,
+   "StartTime[0]": 0,
+   "StartTime[1]": 2,
+   "StartTime[2]": 4
+  },
+  "variant": 1
+ },
+ "GilShop": {
+  "fields": {
+   "Name": 0
+  },
+  "variant": 1
+ },
+ "Recipe": {
+  "fields": {
+   "AmountIngredient[0]": 7,
+   "AmountIngredient[1]": 9,
+   "AmountIngredient[2]": 11,
+   "AmountIngredient[3]": 13,
+   "AmountIngredient[4]": 15,
+   "AmountIngredient[5]": 17,
+   "AmountIngredient[6]": 19,
+   "AmountIngredient[7]": 21,
+   "AmountResult": 5,
+   "CraftType": 1,
+   "Ingredient[0]": 6,
+   "Ingredient[1]": 8,
+   "Ingredient[2]": 10,
+   "Ingredient[3]": 12,
+   "Ingredient[4]": 14,
+   "Ingredient[5]": 16,
+   "Ingredient[6]": 18,
+   "Ingredient[7]": 20,
+   "ItemResult": 4,
+   "RecipeLevelTable": 2
+  },
+  "variant": 1
+ },
+ "ENpcResident": {
+  "fields": {
+   "Singular": 0,
+   "Title": 8
+  },
+  "variant": 1
+ },
+ "Level": {
+  "fields": {
+   "Map": 7,
+   "Object": 6,
+   "Territory": 9,
+   "X": 0,
+   "Y": 1,
+   "Z": 2
+  },
+  "variant": 1
+ },
+ "ContentFinderCondition": {
+  "fields": {
+   "ClassJobLevelRequired": 17,
+   "ClassJobLevelSync": 18,
+   "ContentType": 45,
+   "Image": 50,
+   "Name": 43
+  },
+  "variant": 1
+ },
+ "Quest": {
+  "fields": {
+   "GilReward": 1570,
+   "IssuerStart": 39,
+   "JournalGenre": 1642,
+   "Name": 0,
+   "PlaceName": 1641
+  },
+  "variant": 1
+ },
+ "Achievement": {
+  "fields": {
+   "AchievementCategory": 0,
+   "Description": 2,
+   "Icon": 11,
+   "Name": 1,
+   "Points": 5
+  },
+  "variant": 1
+ },
+ "BNpcName": {
+  "fields": {
+   "Singular": 0
+  },
+  "variant": 1
+ },
+ "Fate": {
+  "fields": {
+   "ClassJobLevel": 10,
+   "ClassJobLevelMax": 11,
+   "Description": 1,
+   "Location": 9,
+   "Name": 0,
+   "Icon": 16
+  },
+  "variant": 1
+ },
+ "Leve": {
+  "fields": {
+   "ClassJobCategory": 13,
+   "ClassJobLevel": 6,
+   "Description": 1,
+   "GilReward": 22,
+   "LevelLevemete": 26,
+   "Name": 0,
+   "PlaceNameIssued": 10
+  },
+  "variant": 1
+ },
+ "FishingSpot": {
+  "fields": {
+   "GatheringLevel": 0,
+   "Item[0]": 13,
+   "Item[1]": 14,
+   "Item[2]": 15,
+   "Item[3]": 16,
+   "Item[4]": 17,
+   "Item[5]": 18,
+   "Item[6]": 19,
+   "Item[7]": 20,
+   "Item[8]": 21,
+   "Item[9]": 22,
+   "PlaceName": 23,
+   "Radius": 11,
+   "TerritoryType": 6,
+   "X": 9,
+   "Z": 10
+  },
+  "variant": 1
+ },
+ "JournalGenre": {
+  "fields": {
+   "Icon": 0,
+   "JournalCategory": 1,
+   "Name": 3
+  },
+  "variant": 1
+ },
+ "Action": {
+  "fields": {
+   "Icon": 2,
+   "Name": 0
+  },
+  "variant": 1
+ },
+ "CraftAction": {
+  "fields": {
+   "Icon": 4,
+   "Name": 0
+  },
+  "variant": 1
+ },
+ "Status": {
+  "fields": {
+   "Icon": 2,
+   "Name": 0
+  },
+  "variant": 1
+ },
+ "ContentType": {
+  "fields": {
+   "Icon": 1,
+   "Name": 0
+  },
+  "variant": 1
+ },
+ "RetainerTaskNormal": {
+  "fields": {
+   "Item": 0
+  },
+  "variant": 1
+ },
+ "GilShopItem": {
+  "fields": {
+   "Item": 0
+  },
+  "variant": 2
+ },
+ "_validate": [
+  [
+   "PlaceName",
+   40,
+   "Name",
+   "Ul'dah - Steps of Nald"
+  ],
+  [
+   "PlaceName",
+   271,
+   "Name",
+   "Horizon"
+  ],
+  [
+   "Item",
+   5111,
+   "Name",
+   "Iron Ore"
+  ],
+  [
+   "Item",
+   5111,
+   "PriceLow",
+   1
+  ],
+  [
+   "Map",
+   13,
+   "Id",
+   "w1t1/01"
+  ],
+  [
+   "Aetheryte",
+   17,
+   "PlaceName",
+   271
+  ]
+ ],
+ "_problems": [
+  "Item.BaseParamValue[4]: ambiguous [1, 3, 6, 7, 29, 37] -> 1",
+  "Item.BaseParam[4]: ambiguous [1, 3, 6, 7, 29, 37] -> 1",
+  "EquipSlotCategory.FingerL: ambiguous [11, 12] -> 11",
+  "EquipSlotCategory.FingerR: ambiguous [11, 12] -> 11"
+ ]
+}

@@ -1,0 +1,67 @@
+# --- Node / frontend ---
+node_modules/
+app/dist/
+app/.vite/
+
+# --- Rust / Tauri ---
+target/
+app/src-tauri/target/
+# bundled sidecar exe (regenerable, large)
+app/src-tauri/binaries/
+
+# --- .NET (portrait sidecar experiment) ---
+tools/portrait-sidecar/bin/
+tools/portrait-sidecar/obj/
+
+# --- PyInstaller ---
+backend/build/
+backend/dist/
+backend/*.spec
+
+# --- Python ---
+__pycache__/
+*.pyc
+.venv/
+venv/
+backend/.venv/
+
+# --- Secrets / local config ---
+.env
+*.local
+backend/.env
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+*.log
+# local convenience shortcuts (e.g. to the built installer)
+*.lnk
+
+# --- Local tooling / sessions ---
+# Claude Code session config, agent run logs
+.claude/
+logs/
+# game-data cache extracted from the LOCAL game install (regenerable, 20MB)
+gameclient.sqlite
+
+# --- App data (generated) ---
+# IN DEV, DATA_DIR *IS* THE REPO ROOT (see backend/paths.py), so running the app
+# writes YOUR PERSONAL DATA straight into the source tree: your character profile,
+# your chats, scraped characters. None of it belongs in a published repo — and the
+# scraped character files are other players' data, not just yours.
+# player profiles, gear archive, shared context
+profile/
+# conversations, attachments, generated assets
+chats/
+# scraped characters + cached news
+knowledge/
+# source-fetch TTL cache (repo root in dev; app-data when packaged)
+cache/
+# UI settings (repo root in dev; app-data when packaged)
+app_settings.json
+# patch stamp for cache invalidation
+game_version.json
+# the player's custom map pins
+map_pins.json
+data/
+output/
