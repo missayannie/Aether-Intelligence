@@ -173,32 +173,6 @@ Notes:
   machine (the Agent SDK runs on it). The API-key path is fully self-contained.
 - The installer is unsigned; see `SIGNING.md` for the code-signing plan.
 
-### macOS build (must run ON a Mac)
-
-Tauri and PyInstaller can't cross-compile from Windows; the code is already
-cross-platform. See `MACOS_BUILD_HANDOFF.md`. Short version:
-
-```bash
-brew install rust node python@3.12
-cd ffxiv-guide/backend && python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt
-cd ../app && npm install
-cd .. && bash scripts/build-installer.sh
-```
-
-Output lands in `app/src-tauri/target/release/bundle/` (`macos/` + `dmg/`).
-Unsigned macOS apps are gatekept — right-click → Open the first time.
-
-## Syncing to your Mac
-
-Source is mirrored to the Google Drive folder (build artifacts excluded):
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\mirror-to-drive.ps1
-```
-
-Building must happen on local disk — the Drive filesystem can't support
-node_modules or Rust's target folder.
-
 ## Contributing
 
 This project is **source-available, not community-developed** — the code is
