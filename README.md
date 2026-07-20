@@ -266,6 +266,10 @@ the version (`v1.2`), and attach the NSIS installer — the one ending
 `version` in `app/src-tauri/tauri.conf.json` in step with the tag you publish.
 Nothing else is required: no update manifest, no signing key.
 
+## Changelog
+
+What changed in each release: [CHANGELOG.md](CHANGELOG.md).
+
 ## Contributing
 
 This project is **source-available, not community-developed** — the code is
