@@ -142,18 +142,36 @@ export default function Editor({
     threadRef.current?.scrollTo(0, threadRef.current.scrollHeight);
   }, [thread, askBusy]);
 
-  // Load HTML only when the target changes — never mid-typing (would drop the caret).
-  useEffect(() => {
+  // The markdown this surface last loaded or produced. Lets the [markdown]
+  // effect below tell an ECHO of our own onChange (same string coming back as
+  // a prop — ignore, or typing would drop the caret) from an EXTERNAL change
+  // (the doc-thread agent's update_doc — must re-render, or the open tab keeps
+  // showing the old doc and its next emit() writes the stale DOM back over
+  // the agent's edit).
+  const lastMd = useRef<string>("");
+
+  const loadDom = () => {
     if (!ref.current) return;
     ref.current.innerHTML = marked.parse(markdown || "") as string;
+    lastMd.current = markdown || "";
     hydrateAssets(ref.current, chatId);  // make embedded maps/portraits actually show
     hydrateCheckboxes(ref.current);      // make checklist boxes tickable
-  }, [docKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  };
+
+  // Load HTML when the target changes — never mid-typing (would drop the caret).
+  useEffect(() => { loadDom(); }, [docKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // …and when the CONTENT changes under us (agent edit landing in the open tab).
+  useEffect(() => {
+    if ((markdown || "") !== lastMd.current) loadDom();
+  }, [markdown]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const emit = () => {
     if (!ref.current) return;
     syncCheckboxAttrs(ref.current);
-    onChange(td.turndown(ref.current.innerHTML));
+    const md = td.turndown(ref.current.innerHTML);
+    lastMd.current = md;
+    onChange(md);
   };
 
   // Clicks inside the editable area. Two widgets behave as widgets rather than text:

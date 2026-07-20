@@ -189,7 +189,9 @@ TOOLS = [
         "function": {
             "name": "lookup_item",
             "description": (
-                "Look up an item in Garland Tools, this app's item database. Returns "
+                "Look up an item in this app's item database (the player's own "
+                "installed game client when available, community data otherwise; "
+                "the result's `source` says which — cite THAT). Returns "
                 "item level, the jobs that can equip it, stats, materia slots, the "
                 "in-game description, an icon image_url, its page url, HOW YOU GET "
                 "ONE — gathering_nodes (each has the node `name` AND the `zone` it "
@@ -383,7 +385,7 @@ TOOLS = [
         "function": {
             "name": "db_links",
             "description": (
-                "Get Garland Tools database URLs for a BATCH of named things at once "
+                "Get this app's database URLs for a BATCH of named things at once "
                 "— items/gear, dungeons & trials (kind 'instance'), NPCs, quests, "
                 "achievements, mobs, FATEs, gathering nodes. Use it when you name "
                 "in-game content so each name is a clickable link the app opens in "
@@ -445,7 +447,7 @@ TOOLS = [
             "description": (
                 "Where an NPC stands: every location with EXACT in-game flag "
                 "coordinates, plus the quests they give at each spot — straight from "
-                "Garland Tools, no text parsing. THE tool for 'where is <NPC>' and "
+                "the app's database, no text parsing. THE tool for 'where is <NPC>' and "
                 "for pinning a quest giver: find the quest's NPC, call this, pick "
                 "the location whose quests match, then pin_on_map with its zone and "
                 "x/y. An NPC can stand in several zones, so check the quest list "
@@ -705,12 +707,36 @@ TOOLS = [
 ]
 
 
+# Hard per-question ceiling on search-family calls. The prompt already says
+# "stop searching after 3-4 attempts", but small models ignore it — GPT-5.4
+# mini once ran ~50 wiki searches in one question. ctx is a fresh dict per
+# /chat request, so the counter naturally scopes to one user turn.
+_SEARCH_TOOLS = {"search_wiki", "search_forum"}
+_SEARCH_BUDGET = 12
+
+
 def execute_tool(name: str, args: dict, ctx: dict | None = None) -> str:
     """Run a tool call. Returns a JSON string the model reads as the tool result.
     `ctx` carries per-chat state (e.g. the assets dir) for tools that need it."""
     import time as _time
     _t0 = _time.time()
-    result = _execute_tool(name, args, ctx)
+    if name in _SEARCH_TOOLS and ctx is not None:
+        n = ctx["_searches"] = ctx.get("_searches", 0) + 1
+        if n > _SEARCH_BUDGET:
+            result = _dump({
+                "error": "search budget exhausted",
+                "note": (f"You have already run {n - 1} searches for this "
+                         "question. STOP searching — further searches will "
+                         "also be refused. Either ask_user ONE narrowing "
+                         "question (only if the player's answer would change "
+                         "where to look), or answer NOW from the results you "
+                         "already have, briefly noting anything you could "
+                         "not confirm."),
+            })
+        else:
+            result = _execute_tool(name, args, ctx)
+    else:
+        result = _execute_tool(name, args, ctx)
     # The flight recorder: ONE log point covers both engines (api + subscription
     # both come through here). See llm/looplog.py.
     try:
@@ -820,7 +846,25 @@ def _execute_tool(name: str, args: dict, ctx: dict | None = None) -> str:
                              "different spelling before telling the player it "
                              "doesn't exist."),
                 })
+            # Items whose record shows NO acquisition path (pasture leavings, mob
+            # drops, coffer-only cosmetics — the databases simply don't carry it):
+            # the wiki item page's Acquisition section usually does, so fetch it
+            # here instead of leaving the model to say "it doesn't name which"
+            # and stop. (Real failure: Sanctuary Carapace, whose Common/Bonus
+            # animal lists live only on the wiki page.)
+            wiki_acq = None
+            if not (res.nodes or res.vendors or res.ventures):
+                w = _wiki.lookup("consolegames", res.name + " acquisition")
+                if w and (w.tables or w.extract):
+                    wiki_acq = {
+                        "source": w.source, "page": w.title, "url": w.url,
+                        "extract": w.extract, "sections": w.tables,
+                        "note": ("How to obtain, from the wiki — the item databases "
+                                 "have no acquisition path for this item. Only trust "
+                                 "it if `page` is actually about this item."),
+                    }
             return _dump({
+                **({"wiki_acquisition": wiki_acq} if wiki_acq else {}),
                 "found": True, "source": res.source, "name": res.name, "url": res.url,
                 "item_level": res.item_level, "jobs": res.jobs, "patch": res.patch,
                 "description": res.description, "details": res.details,
@@ -853,8 +897,10 @@ def _execute_tool(name: str, args: dict, ctx: dict | None = None) -> str:
                 "sell_price_gil": res.sell_price,
                 "tradeable": res.tradeable,
                 "source_note": (
-                    "Garland Tools is community-maintained and can lag a patch. For "
-                    "anything the CURRENT patch touched, confirm with check_patch_notes."
+                    "Cite the `source` field above verbatim — do NOT attribute this to "
+                    "a database brand it didn't come from. Community data (not the "
+                    "game client) can lag a patch: for anything the CURRENT patch "
+                    "touched, confirm with check_patch_notes."
                 ),
             })
 

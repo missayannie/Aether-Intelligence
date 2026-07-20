@@ -850,13 +850,15 @@ a[href^="http"]:hover { text-decoration: underline; filter: brightness(1.15); }
 .attach-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .attach-x { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 11px; padding: 0 2px; }
 .attach-x:hover { color: var(--danger); }
+/* Positioning context for the model picker, so the popup opens right above the
+   chip. Carries the chip's shrink behaviour in the composer row. */
+.model-anchor { position: relative; display: inline-flex; min-width: 0; flex: 0 4 auto; }
 .composer-model {
   display: inline-flex; align-items: center; gap: 5px; background: var(--bg1); color: var(--text);
   border: 1px solid var(--border); border-radius: 999px; padding: 4px 10px; font-size: 12px; cursor: pointer;
   /* Keep the model name on one line and ellipsis it — it used to wrap to three
      lines ("Claude / Opus / 4.8") and blow the composer's height out. */
   white-space: nowrap; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis;
-  flex: 0 4 auto;
 }
 .composer-model:hover { border-color: var(--accent); }
 .ctx-meter {
@@ -888,7 +890,9 @@ a[href^="http"]:hover { text-decoration: underline; filter: brightness(1.15); }
 /* While streaming, the send button becomes the Stop button — danger-tinted so
    "this interrupts the answer" reads at a glance. */
 .send.stop { color: var(--danger); border-color: var(--danger); background: transparent; font-size: 13px; }
-.picker.up { top: auto; bottom: 62px; right: 12px; }
+/* Opens upward from the model chip: anchored to .model-anchor, flush with the
+   chip's left edge, sitting just above it. */
+.picker.up { top: auto; bottom: calc(100% + 8px); left: 0; right: auto; }
 
 /* Reference panel */
 .refpanel { background: var(--bg1); border-left: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
@@ -911,7 +915,9 @@ a[href^="http"]:hover { text-decoration: underline; filter: brightness(1.15); }
    you were holding it or not, so a drag felt like nothing was happening. `.held` is
    the tab in your hand; `.drop-before` is the gap it will land in; `.drop-zone`
    lights the whole strip when hovering empty space in it. */
-.tab, .center-tabs .ct { cursor: grab; }
+/* Hovering a tab is CLICKING territory — the normal pointer. The grab hand
+   appears only while a tab is actually held (dragging). */
+.tab, .center-tabs .ct, .tab[draggable] { cursor: pointer; }
 .tab.held, .center-tabs .ct.held {
   cursor: grabbing; opacity: .45; transform: scale(.97);
   outline: 1px dashed var(--accent); outline-offset: -2px;
@@ -920,8 +926,6 @@ a[href^="http"]:hover { text-decoration: underline; filter: brightness(1.15); }
 .tab.drop-before, .center-tabs .ct.drop-before { box-shadow: inset 3px 0 0 0 var(--accent); }
 .tabs.drop-zone { background: var(--accent-bg); }
 .tabs, .center-tabs { transition: background .12s; }
-.tab[draggable] { cursor: grab; }
-.tab[draggable]:active { cursor: grabbing; }
 
 /* Dockable panels (VS Code-style) */
 .hgutter { height: 6px; flex-shrink: 0; cursor: row-resize; background: transparent; border-top: 1px solid var(--border); transition: background .15s; }

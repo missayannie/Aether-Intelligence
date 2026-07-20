@@ -44,6 +44,12 @@ CASES = [
     # Must resolve "the moon"/"lopporits" -> Mare Lamentorum and pin, not ask.
     ("Can you pin the aether currents on the moon, where the lopporits live?",
      [r"Mare Lamentorum"], [r"which zone|zone name.{0,30}\?"], 4),
+    # The real Sanctuary Carapace failures (2026-07-19, twice): the animal list
+    # lives in the wiki item page's Acquisition BULLET LISTS (Common/Bonus) —
+    # the answer must name actual animals, not shrug at the page.
+    ("What animal do I get sanctuary carapace from?",
+     [r"Yellow Coblyn|Adamantoise|Beachcomb|Morbol Seedling|Glyptodon Pup"],
+     [r"doesn'?t name|couldn'?t (verify|find|confirm)"], None),
 ]
 
 

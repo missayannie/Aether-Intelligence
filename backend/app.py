@@ -35,7 +35,7 @@ from keys import vault
 from llm import registry
 from llm.dispatch import run as run_chat
 import attachments
-from prompts import build_system_prompt
+from prompts import OVERLAY_SYSTEM, build_system_prompt
 import subscription
 import workspaces
 from sources.lodestone_character import CharacterClient, LodestoneBlocked
@@ -583,6 +583,8 @@ def list_chats():
         out.append({"id": c.get("id", d.name), "title": c.get("title", "New chat"),
                     "count": len(c.get("messages", [])),
                     "owner": c.get("owner", ""),
+                    # "overlay" for in-game Ask-pill chats — the sidebar groups them.
+                    "surface": c.get("surface", ""),
                     "created_at": created,
                     "updated_at": updated})
     out.sort(key=lambda c: c["updated_at"], reverse=True)
@@ -789,6 +791,14 @@ class ChatBody(BaseModel):
     # The composer's "ignore my profile" switch — answer without the player's
     # personal profile in context (preferences still apply).
     ignore_profile: bool = False
+    # "" = the normal app chat. "overlay" = the in-game Ask pill: answers render
+    # on a tiny card over the game, so a compact-answer system block is added
+    # and the chat is stamped for sidebar grouping (docs/overlay-spec.md §6.1).
+    surface: str = ""
+    # One-shot screen awareness (overlay §6.5): a data-URL JPEG of the game
+    # screen, attached to THIS turn's message only — never stored on the chat,
+    # so it isn't re-billed on later turns like attachments are.
+    screenshot: str = ""
 
 
 class AnswerBody(BaseModel):
@@ -963,11 +973,15 @@ async def chat_endpoint(body: ChatBody):
     data["messages"].append({"role": "user", "content": body.message})
     if data.get("title") in (None, "New chat") and data["messages"]:
         data["title"] = body.message[:48]
+    if body.surface == "overlay":
+        data["surface"] = "overlay"
 
     # Flavor the chat by its OWNER'S profile, not any active switcher — opening an
     # old chat always uses the profile it was created under.
     convo = [{"role": "system", "content": build_system_prompt(
         data.get("owner", ""), include_profile=not body.ignore_profile)}]
+    if body.surface == "overlay":
+        convo.append({"role": "system", "content": OVERLAY_SYSTEM})
     # Inject attached-file text as context (works on both engines).
     attach_ctx = attachments.context_block(body.chat_id)
     if attach_ctx:
@@ -989,11 +1003,12 @@ async def chat_endpoint(body: ChatBody):
     # Attach images as vision blocks on the API path (litellm multimodal).
     if body.auth != "subscription":
         imgs = attachments.image_data_urls(body.chat_id)
+        if body.screenshot.startswith("data:image/"):
+            imgs = [*imgs, {"type": "image_url", "image_url": {"url": body.screenshot}}]
         if imgs and convo and convo[-1]["role"] == "user":
-            convo[-1] = {
-                "role": "user",
-                "content": [{"type": "text", "text": convo[-1]["content"]}, *imgs],
-            }
+            base = convo[-1]["content"]
+            blocks = base if isinstance(base, list) else [{"type": "text", "text": base}]
+            convo[-1] = {"role": "user", "content": [*blocks, *imgs]}
 
     def _create_doc(args: dict) -> dict:
         """Save agent-authored content as a DRAFT doc on this chat. Appends to the
@@ -1086,6 +1101,13 @@ async def chat_endpoint(body: ChatBody):
     # Subscription-path image vision (Agent SDK, Anthropic-format blocks).
     if body.auth == "subscription":
         sub_imgs = attachments.image_blocks_anthropic(body.chat_id)
+        if body.screenshot.startswith("data:image/"):
+            head, _, b64 = body.screenshot.partition(",")
+            media = head[5:head.index(";")] if ";" in head else "image/jpeg"
+            sub_imgs = [*sub_imgs, {
+                "type": "image",
+                "source": {"type": "base64", "media_type": media, "data": b64},
+            }]
         if sub_imgs:
             ctx["images"] = sub_imgs
 
@@ -1117,6 +1139,102 @@ async def chat_endpoint(body: ChatBody):
                         chars=len(text))
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+# ---------- Overlay watches (the passive chips' data) ----------
+class WatchBody(BaseModel):
+    kind: str = "pin"        # "pin" | "pinset" | "node" (timed)
+    label: str = ""
+    zone: str = ""
+    x: float = 0
+    y: float = 0
+    icon: str = ""
+    category: str = ""       # pinset: the category name shown on the chip
+    pins: list[dict] = []    # pinset: [{x, y, label}] in 2048 map space
+    ref: str = ""            # node: the gathering-point id — backend enriches
+    windows: list[dict] = [] # timed: [{start_et: hour, dur_min: ET minutes}]
+    # The raw map payload the chip re-opens on click (same shape the card's
+    # "Open map" uses), so a chip restores exactly what the answer pinned.
+    place: dict = {}
+
+
+@app.get("/overlay/watches")
+def overlay_watches():
+    import overlay_watches
+    return {"watches": overlay_watches.list_watches()}
+
+
+@app.post("/overlay/watches")
+def overlay_watches_add(body: WatchBody):
+    import overlay_watches
+    w = body.model_dump()
+    # A node watch arrives as just {kind, ref}: the backend owns the lookup so
+    # every arm point (db detail, agent card) stays a one-liner. Spawn windows
+    # come from the local client's pop-time table; coords are GAME coords, so
+    # the place pin says space:"game" and the app converts on open.
+    if w["kind"] == "node" and w.get("ref"):
+        from sources import gameclient
+        n = gameclient.node_record(w["ref"], items=False) or {}
+        if n.get("spawn_times"):
+            w["windows"] = [{"start_et": h, "dur_min": n.get("uptime_minutes") or 60}
+                            for h in n["spawn_times"]]
+        w["zone"] = w.get("zone") or n.get("zone") or ""
+        w["label"] = w.get("label") or n.get("name") or "Gathering node"
+        if n.get("x") and n.get("y"):
+            w["x"], w["y"] = n["x"], n["y"]
+            w.setdefault("place", {})
+            if not w["place"]:
+                w["place"] = {"zone": w["zone"],
+                              "pin": {"x": n["x"], "y": n["y"],
+                                      "label": w["label"], "space": "game"}}
+    return {"ok": True, "watch": overlay_watches.add(w)}
+
+
+@app.delete("/overlay/watches/{watch_id}")
+def overlay_watches_remove(watch_id: str):
+    import overlay_watches
+    return {"ok": overlay_watches.remove(watch_id)}
+
+
+@app.get("/overlay/timers")
+def overlay_timers():
+    """Real-clock open/close instants for every timed watch.
+
+    Eorzea time runs 3600/175 × real (1 ET hour = 175 real seconds). For each
+    watch the earliest window wins: active ones report closes_at, upcoming
+    ones opens_at + closes_at — all unix seconds, so the overlay just ticks
+    down locally between polls.
+    """
+    import time as _time
+
+    import overlay_watches
+
+    now = _time.time()
+    et_day = (now * 3600 / 175) % 86400   # ET seconds since ET midnight
+    out = []
+    for w in overlay_watches.list_watches():
+        wins = w.get("windows") or []
+        if not wins:
+            out.append({"id": w["id"], "timed": False})
+            continue
+        best = None
+        for win in wins:
+            start = (int(win.get("start_et") or 0) % 24) * 3600
+            dur = max(1, int(win.get("dur_min") or 60)) * 60   # ET seconds
+            since = (et_day - start) % 86400
+            if since < dur:  # open right now
+                cand = {"active": True, "opens_at": now,
+                        "closes_at": now + (dur - since) * 175 / 3600}
+            else:
+                to_open = (start - et_day) % 86400
+                opens = now + to_open * 175 / 3600
+                cand = {"active": False, "opens_at": opens,
+                        "closes_at": opens + dur * 175 / 3600}
+            if best is None or (cand["active"] and not best["active"]) \
+               or (cand["active"] == best["active"] and cand["opens_at"] < best["opens_at"]):
+                best = cand
+        out.append({"id": w["id"], "timed": True, **best})
+    return {"now": now, "timers": out}
 
 
 # ---------- Database browser (right-panel tab) ----------
@@ -1579,6 +1697,8 @@ async def docs_edit(body: DocEditBody):
         return result
 
     ctx = {
+        "chat_id": body.chat_id,     # flight recorder: doc-thread turns were "?"
+        "engine": body.auth,
         "annotate_handler": _annotate_handler(body.chat_id, tmp=True),
         "save_asset": _save_asset(body.chat_id),
         "update_doc": _update_doc,

@@ -41,8 +41,11 @@ Thumbs.db
 # Claude Code session config, agent run logs
 .claude/
 logs/
-# game-data cache extracted from the LOCAL game install (regenerable, 20MB)
+# game-data cache extracted from the LOCAL game install (regenerable, 20MB).
+# The -wal/-shm siblings are SQLite's journal files — same deal.
 gameclient.sqlite
+gameclient.sqlite-wal
+gameclient.sqlite-shm
 
 # --- App data (generated) ---
 # IN DEV, DATA_DIR *IS* THE REPO ROOT (see backend/paths.py), so running the app
@@ -63,5 +66,7 @@ app_settings.json
 game_version.json
 # the player's custom map pins
 map_pins.json
+# the player's armed in-game overlay chips (nodes/pins they're watching)
+overlay_watches.json
 data/
 output/

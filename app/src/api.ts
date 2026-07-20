@@ -37,6 +37,7 @@ export type SubStatus = {
 // using an old chat bumps it to the top.
 export type ChatSummary = {
   id: string; title: string; count: number; owner: string;
+  surface?: string;   // "overlay" = the in-game Ask pill's chat
   created_at?: string; updated_at?: string;
 };
 export type Workspace = { slug: string; display_name: string; character_id: string; kind: "global" | "profile" };
@@ -174,6 +175,31 @@ export function matchSource(
   const h = host(cited.url);
   return h ? catalog.find((s) => s.url && host(s.url) === h) : undefined;
 }
+
+// A passive-chip watch (overlay). `place` is the raw map payload the chip
+// re-opens on click — same shape the Ask card's "Open map" uses.
+export type OverlayWatch = {
+  id: string;
+  kind: "pin" | "pinset" | "node";
+  label: string;
+  ref?: string;   // node: gathering-point id — the backend enriches the rest
+  zone?: string;  // optional at arm time; the backend fills it for node watches
+  x?: number;
+  y?: number;
+  icon?: string;
+  category?: string;
+  pins?: { x: number; y: number; label?: string }[];
+  place?: Record<string, unknown>;
+  created_at?: string;
+};
+
+export type OverlayTimer = {
+  id: string;          // the watch id
+  timed: boolean;
+  active?: boolean;    // window open right now
+  opens_at?: number;   // unix seconds
+  closes_at?: number;
+};
 
 export type ChatEvent =
   | { type: "token"; text: string }
@@ -365,6 +391,20 @@ export const api = {
     j<BoundCharacter>(`/workspaces/${slug}/character/refresh`, { method: "POST" }),
 
   listChats: () => j<{ chats: ChatSummary[] }>("/chats"),
+  // Overlay watches — the passive chips' data (pins/pinsets armed from answer
+  // cards or the app; docs/overlay-spec.md §6.3).
+  overlayWatches: () => j<{ watches: OverlayWatch[] }>("/overlay/watches"),
+  overlayWatchAdd: (w: Omit<OverlayWatch, "id" | "created_at">) =>
+    j<{ ok: boolean; watch: OverlayWatch }>("/overlay/watches", {
+      method: "POST",
+      body: JSON.stringify(w),
+    }),
+  overlayWatchRemove: (id: string) =>
+    j<{ ok: boolean }>(`/overlay/watches/${id}`, { method: "DELETE" }),
+  // Real-clock open/close for timed watches (unix seconds — tick locally).
+  overlayTimers: () =>
+    j<{ now: number; timers: OverlayTimer[] }>("/overlay/timers"),
+
   createChat: (owner: string) =>
     j<Chat>("/chats", { method: "POST", body: JSON.stringify({ owner }) }),
   getChat: (id: string) => j<Chat>(`/chats/${id}`),
@@ -479,12 +519,14 @@ export const api = {
     onEvent: (e: ChatEvent) => void,
     ignoreProfile = false,
     signal?: AbortSignal,
+    surface = "",   // "overlay" = the in-game Ask pill (compact-card answers)
+    screenshot = "",  // one-shot data-URL JPEG of the game screen (overlay §6.5)
   ): Promise<void> {
     const r = await fetch(BASE + "/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chat_id, model, message, auth,
-                             ignore_profile: ignoreProfile }),
+                             ignore_profile: ignoreProfile, surface, screenshot }),
       signal,
     });
     if (!r.ok || !r.body) throw new Error(`chat failed: ${r.status}`);

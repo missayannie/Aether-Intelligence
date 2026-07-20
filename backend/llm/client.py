@@ -202,7 +202,7 @@ async def _chat_inner(model_id: str, messages: list[dict], ctx: dict | None,
         try:
             stream = await litellm.acompletion(
                 model=model_id, messages=convo, tools=TOOLS,
-                stream=True, temperature=0.7,
+                stream=True, temperature=0.3,
                 # The final chunk then carries real token usage (drop_params
                 # sheds this on providers that don't support it).
                 stream_options={"include_usage": True},
@@ -319,8 +319,45 @@ async def _chat_inner(model_id: str, messages: list[dict], ctx: dict | None,
                        "pins": parsed.get("pins"), "category": parsed.get("category", ""),
                        "icon": parsed.get("icon", "")}
 
+    # Round budget exhausted. Don't throw the whole run away (24 rounds of
+    # tool results = real tokens spent): force one final completion with tools
+    # withheld, so the model writes up whatever it has gathered. A partial,
+    # caveated answer beats "Reached tool-call limit" every time.
     looplog.log(chat_id, "api", "error", detail=f"hit MAX_ROUNDS={MAX_ROUNDS}")
-    yield {"type": "error", "message": "Reached tool-call limit without a final answer."}
+    convo.append({
+        "role": "user",
+        "content": ("[system] Tool budget exhausted — no more tool calls are "
+                    "possible. Answer the question NOW using only the "
+                    "information already gathered above. Be direct; briefly "
+                    "note anything you could not confirm."),
+    })
+    try:
+        stream = await litellm.acompletion(
+            # tools stay declared (tool-role history needs them on some
+            # providers) but tool_choice="none" forbids another round; any
+            # stray tool-call deltas are simply not read below.
+            model=model_id, messages=convo, tools=TOOLS, tool_choice="none",
+            stream=True, temperature=0.3,
+            stream_options={"include_usage": True},
+            **_extra_params(model_id),
+        )
+        async for chunk in stream:
+            u = getattr(chunk, "usage", None)
+            if u and (getattr(u, "prompt_tokens", 0) or getattr(u, "completion_tokens", 0)):
+                tally["got_usage"] = True
+                tally["in"] += getattr(u, "prompt_tokens", 0) or 0
+                tally["out"] += getattr(u, "completion_tokens", 0) or 0
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            if getattr(delta, "content", None):
+                tally["out_chars"] += len(delta.content)
+                yield {"type": "token", "text": delta.content}
+    except Exception as exc:
+        yield {"type": "error", "message": _friendly_llm_error(exc)}
+        return
+    looplog.log(chat_id, "api", "done", rounds=rounds, forced=True)
+    yield {"type": "done"}
 
 
 def _safe_json(s: str) -> dict:
