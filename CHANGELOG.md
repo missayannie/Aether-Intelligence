@@ -37,6 +37,14 @@ Overlay polish and fixes, on top of v1.1.1.
   with the real answer, on the card and in the pill's history. Only what
   follows the last tool call is kept now, in the stored message as well as on
   screen.
+- **One conversation, not two.** The answer used to stream into a separate card
+  *and* land in the history box — the same text twice, with the card then
+  disappearing. Answers now stream directly into the chat history, where they
+  stay; the map/chip actions for the newest answer sit just beneath it.
+- **The resize grip stays on the corner.** It's pinned to the bottom-right of
+  the chat surface at any size you drag it to.
+- With **keep overlay surfaces open** on, the chat history stays open too
+  rather than folding back to a bare pill.
 - **Dragging the pill no longer jumps.** Deferred re-layout passes were firing
   mid-drag and snapping the widget back to its saved position.
 - **Hotkeys no longer flip-flop.** Pressing `` Alt+` `` and `Alt+D` in quick
