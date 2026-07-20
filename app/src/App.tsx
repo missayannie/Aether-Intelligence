@@ -175,7 +175,7 @@ import AnnotationEditor from "./AnnotationEditor";
 import Editor from "./Editor";
 import GameMap, { MapNavBar } from "./GameMap";
 import BrowserPane, { type BrowserReq } from "./BrowserPane";
-import type { OverlayWatch, ZoneMap } from "./api";
+import type { OverlayWatch, UpdateInfo, UpdateStatus, ZoneMap } from "./api";
 import "./App.css";
 
 // Render assistant text as formatted markdown (headings, lists, bold, links,
@@ -744,6 +744,10 @@ export default function App() {
   // backend keep working; reopen from the tray icon. The Rust shell owns the
   // actual close behavior, so every change is pushed to it (set_close_to_tray).
   const [closeToTray, setCloseToTray] = useState<boolean>(false);
+  // Updates: check GitHub on launch (on by default — being told a fix exists
+  // is the point); installing without asking stays opt-in.
+  const [autoCheckUpdates, setAutoCheckUpdates] = useState<boolean>(true);
+  const [autoInstallUpdates, setAutoInstallUpdates] = useState<boolean>(false);
   const changeCloseToTray = (v: boolean) => {
     setCloseToTray(v);
     import("@tauri-apps/api/core")
@@ -829,6 +833,39 @@ export default function App() {
       .then(({ emit }) => emit("overlay://scale", overlayScale))
       .catch(() => { /* plain-web dev: the overlay tab hears the storage event */ });
   }, [overlayScale]);
+
+  // Startup update check. Only ever SAYS a release exists (or, if the player
+  // opted in, fetches and launches the installer) — never silently swaps the
+  // app out from under them mid-session.
+  const [updateReady, setUpdateReady] = useState<{ version: string } | null>(null);
+  useEffect(() => {
+    if (!autoCheckUpdates || !settingsHydrated.current) return;
+    let cancelled = false;
+    const t = window.setTimeout(async () => {
+      try {
+        const { getVersion } = await import("@tauri-apps/api/app");
+        const cur = await getVersion();
+        const info = await api.updateCheck(cur);
+        if (cancelled || !info.found || !info.newer || !info.version) return;
+        setUpdateReady({ version: info.version });
+        if (!autoInstallUpdates) return;
+        await api.updateDownload();
+        const poll = window.setInterval(async () => {
+          const s = await api.updateStatus().catch(() => null);
+          if (!s) return;
+          if (s.status === "ready") {
+            window.clearInterval(poll);
+            const { invoke } = await import("@tauri-apps/api/core");
+            await invoke("install_update", { path: s.path, silent: false })
+              .catch(() => {});
+          } else if (s.status === "error") {
+            window.clearInterval(poll);
+          }
+        }, 1000);
+      } catch { /* offline, or no shell in web dev — stay quiet */ }
+    }, 4000);   // let the app finish booting first
+    return () => { cancelled = true; window.clearTimeout(t); };
+  }, [autoCheckUpdates, autoInstallUpdates]);
 
   // The overlay drawer's "Open in app": land on that database record.
   useEffect(() => {
@@ -992,6 +1029,8 @@ export default function App() {
           if (typeof s.density === "string") setDensity(s.density);
           if (typeof s.refresh_profile_on_start === "boolean")
             setRefreshOnStart(s.refresh_profile_on_start);
+          if (typeof s.autoCheckUpdates === "boolean") setAutoCheckUpdates(s.autoCheckUpdates);
+          if (typeof s.autoInstallUpdates === "boolean") setAutoInstallUpdates(s.autoInstallUpdates);
           if (typeof s.closeToTray === "boolean") {
             setCloseToTray(s.closeToTray);
             // Push to the Rust shell, which owns the close behavior.
@@ -1041,6 +1080,7 @@ export default function App() {
           theme, density, fontScale, overlayScale, activeWs, leftW, rightW, bottomH, dock,
           refresh_profile_on_start: refreshOnStart,
           closeToTray, overlayHotkeysV2: overlayHotkeys,
+          autoCheckUpdates, autoInstallUpdates,
           defaultModel: model, defaultAuth: auth,
           splitView, splitW,
         })
@@ -1048,7 +1088,8 @@ export default function App() {
     }, 400);
     return () => window.clearTimeout(t);
   }, [theme, density, fontScale, overlayScale, activeWs, leftW, rightW, bottomH, dock,
-      refreshOnStart, closeToTray, overlayHotkeys, model, auth, splitView, splitW]);
+      refreshOnStart, closeToTray, overlayHotkeys, autoCheckUpdates, autoInstallUpdates,
+      model, auth, splitView, splitW]);
 
   const dragTab = useRef<TabId | null>(null);
   const hgutter = useRef(false);
@@ -3229,6 +3270,15 @@ export default function App() {
           {/* Plain anchors: the delegated link interceptor routes both into the
               in-app browser tab, same as every other external link. */}
           <a className="support-me" href="https://ko-fi.com/missayanight" data-external>♥ Support Me</a>
+          {updateReady && (
+            <button
+              className="upd-banner"
+              title={`Version ${updateReady.version} is available — open Settings to install it`}
+              onClick={() => { setUpdateReady(null); setSettingsOpen(true); }}
+            >
+              ⬆ Update {updateReady.version} available
+            </button>
+          )}
           <button className="settings-btn" onClick={() => setSettingsOpen(true)}>
             ⚙ Settings
           </button>
@@ -3394,6 +3444,10 @@ export default function App() {
           onRefreshOnStart={setRefreshOnStart}
           closeToTray={closeToTray}
           onCloseToTray={changeCloseToTray}
+          autoCheckUpdates={autoCheckUpdates}
+          onAutoCheckUpdates={setAutoCheckUpdates}
+          autoInstallUpdates={autoInstallUpdates}
+          onAutoInstallUpdates={setAutoInstallUpdates}
           overlayHotkeys={overlayHotkeys}
           onOverlayHotkeys={applyOverlayHotkeys}
           models={models}
@@ -3695,6 +3749,135 @@ function OverlayWatchList() {
   );
 }
 
+/** Check GitHub Releases, download the installer, run it. Download and install
+ * stay two explicit steps unless "install automatically" is on — this replaces
+ * the running program, so it shouldn't happen by surprise. */
+function UpdatePanel(props: {
+  autoCheck: boolean;
+  onAutoCheck: (v: boolean) => void;
+  autoInstall: boolean;
+  onAutoInstall: (v: boolean) => void;
+}) {
+  const [current, setCurrent] = useState("");
+  const [info, setInfo] = useState<UpdateInfo | null>(null);
+  const [status, setStatus] = useState<UpdateStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    import("@tauri-apps/api/app")
+      .then(({ getVersion }) => getVersion())
+      .then(setCurrent)
+      .catch(() => setCurrent(""));   // plain-web dev: no shell to ask
+  }, []);
+
+  const install = async (path: string) => {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      // Not silent: the installer's own window is the last confirmation before
+      // it replaces the app, and it restarts cleanly afterwards.
+      await invoke("install_update", { path, silent: false });
+    } catch (e) {
+      setErr(String(e));
+    }
+  };
+
+  const check = async () => {
+    setBusy(true); setErr(""); setInfo(null);
+    try {
+      setInfo(await api.updateCheck(current));
+    } catch (e) {
+      setErr(String(e));
+    }
+    setBusy(false);
+  };
+
+  const download = async () => {
+    setErr("");
+    try {
+      await api.updateDownload();
+      setStatus(await api.updateStatus());
+    } catch (e) {
+      setErr(String(e));
+    }
+  };
+
+  // Poll while a download runs; install when ready if the user opted in.
+  useEffect(() => {
+    if (status?.status !== "downloading") return;
+    const t = window.setInterval(async () => {
+      try {
+        const s = await api.updateStatus();
+        setStatus(s);
+        if (s.status === "ready" && props.autoInstall) void install(s.path);
+      } catch { /* backend busy */ }
+    }, 700);
+    return () => window.clearInterval(t);
+  }, [status?.status, props.autoInstall]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <div className="upd">
+      <div className="upd-row">
+        <span className="toggle-name">
+          Version {current || "—"}
+          {info?.found && info.version && (
+            <span className="upd-latest">
+              {info.newer ? ` · ${info.version} available` : " · up to date"}
+            </span>
+          )}
+        </span>
+        <button className="ovk-reset" disabled={busy} onClick={() => void check()}>
+          {busy ? "Checking…" : "Check for updates"}
+        </button>
+      </div>
+
+      {info?.found && info.newer && (
+        <div className="upd-rel">
+          <div className="upd-name">{info.name || info.tag}</div>
+          {info.notes && <div className="upd-notes">{info.notes.slice(0, 400)}</div>}
+          {status?.status === "downloading" ? (
+            <div className="upd-prog"><div style={{ width: `${status.pct}%` }} /></div>
+          ) : status?.status === "ready" ? (
+            <button className="ovk-reset" onClick={() => void install(status.path)}>
+              Install {status.version} and restart
+            </button>
+          ) : (
+            <button className="ovk-reset" onClick={() => void download()}>
+              Download {info.version}
+              {info.size ? ` (${(info.size / 1048576).toFixed(0)} MB)` : ""}
+            </button>
+          )}
+        </div>
+      )}
+      {(err || status?.error) && <div className="ovk-err">{err || status?.error}</div>}
+
+      <label className="toggle-row">
+        <input type="checkbox" checked={props.autoCheck}
+               onChange={(e) => props.onAutoCheck(e.target.checked)} />
+        <span className="toggle-text">
+          <span className="toggle-name">Check for updates on startup</span>
+          <span className="toggle-hint">
+            Asks GitHub once per launch whether a newer release exists. Nothing
+            downloads until you say so.
+          </span>
+        </span>
+      </label>
+      <label className="toggle-row">
+        <input type="checkbox" checked={props.autoInstall}
+               onChange={(e) => props.onAutoInstall(e.target.checked)} />
+        <span className="toggle-text">
+          <span className="toggle-name">Download and install automatically</span>
+          <span className="toggle-hint">
+            When a newer release is found on startup, fetch it and launch the
+            installer without asking. The app closes to be replaced, so leave
+            this off if you'd rather pick the moment.
+          </span>
+        </span>
+      </label>
+    </div>
+  );
+}
+
 /** Records one hotkey: focus the field, press the combo. Requires a modifier
  * (a bare global "E" would eat the key everywhere in Windows); Esc cancels. */
 function HotkeyField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
@@ -3739,6 +3922,10 @@ function Settings(props: {
   onRefreshOnStart: (on: boolean) => void;
   closeToTray: boolean;
   onCloseToTray: (on: boolean) => void;
+  autoCheckUpdates: boolean;
+  onAutoCheckUpdates: (on: boolean) => void;
+  autoInstallUpdates: boolean;
+  onAutoInstallUpdates: (on: boolean) => void;
   overlayHotkeys: OverlayHotkeySet;
   // Applies + persists; resolves to "" on success or a bind error to show.
   onOverlayHotkeys: (s: OverlayHotkeySet) => Promise<string>;
@@ -3956,6 +4143,14 @@ function Settings(props: {
             </span>
           </span>
         </label>
+
+        <div className="section-label">Updates</div>
+        <UpdatePanel
+          autoCheck={props.autoCheckUpdates}
+          onAutoCheck={props.onAutoCheckUpdates}
+          autoInstall={props.autoInstallUpdates}
+          onAutoInstall={props.onAutoInstallUpdates}
+        />
 
         <div className="section-label">Background &amp; overlay</div>
         <OverlayWatchList />

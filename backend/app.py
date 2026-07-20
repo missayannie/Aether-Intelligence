@@ -1141,6 +1141,42 @@ async def chat_endpoint(body: ChatBody):
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
+# ---------- In-app updates (GitHub Releases) ----------
+@app.get("/update/check")
+def update_check(current: str = ""):
+    """The newest published release, compared against the running app."""
+    import updates
+    try:
+        rel = updates.latest_release()
+    except Exception as exc:
+        raise HTTPException(502, f"Couldn't reach GitHub: {exc}") from exc
+    if not rel:
+        return {"found": False, "current": current}
+    return {"found": True, "current": current,
+            "newer": updates.is_newer(rel.version, current) if current else False,
+            **updates.as_dict(rel)}
+
+
+@app.post("/update/download")
+def update_download():
+    """Start fetching the newest installer; poll /update/status for progress."""
+    import updates
+    try:
+        rel = updates.latest_release()
+    except Exception as exc:
+        raise HTTPException(502, f"Couldn't reach GitHub: {exc}") from exc
+    if not rel:
+        raise HTTPException(404, "No published release with an installer.")
+    updates.download_async(rel)
+    return {"ok": True, "version": rel.version}
+
+
+@app.get("/update/status")
+def update_status():
+    import updates
+    return updates.state()
+
+
 # ---------- Overlay watches (the passive chips' data) ----------
 class WatchBody(BaseModel):
     kind: str = "pin"        # "pin" | "pinset" | "node" (timed)

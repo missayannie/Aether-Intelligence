@@ -11,6 +11,8 @@ subscription at no per-token cost.
 > may be blocked server-side. Personal use at your own risk; the API-key path is
 > the compliant option.
 
+![The app: a chat answer beside the rebuilt in-game map](docs/screenshots/02-map.png)
+
 ## Average API Costs
 
 On a **Claude Pro/Max subscription: nothing extra** — every question is covered
@@ -90,6 +92,16 @@ prompt caching, so the real bill is usually a bit lower.
 - **Diagnosable** — every agent tool call is logged to `logs/agent-*.jsonl` in
   the data folder (tool, arguments, duration, outcome), so a slow or strange
   answer can be traced turn by turn.
+- **Updates itself** — Settings → Updates checks this repo's GitHub Releases,
+  shows what's new, and downloads + launches the installer for you. Checking on
+  startup is on by default; installing without asking is opt-in.
+
+| | |
+|---|---|
+| ![Chat](docs/screenshots/01-chat.png) | ![Database](docs/screenshots/03-database.png) |
+| A cited answer, with in-game things linked into the app | The database: how to get an item, live price, gathering node |
+| ![Settings](docs/screenshots/04-settings-updates.png) | |
+| Updates, overlay watches, and re-bindable shortcuts | |
 
 ## In-game overlay
 
@@ -105,6 +117,15 @@ and the build plan live in [docs/overlay-spec.md](docs/overlay-spec.md).
 | `Alt+D` | **Database drawer** — search everything, keyboard-first (↑↓, Enter, Esc) |
 | `` Alt+Shift+` `` | Show the overlay layer (chips only, no input captured) |
 | `Alt+\` | Kill switch — hide or restore the whole overlay |
+
+<p>
+  <img src="docs/screenshots/05-overlay-pill.png" alt="The Ask pill with a typed question" width="440"><br>
+  <img src="docs/screenshots/06-overlay-drawer.png" alt="The database drawer searching for 'cordia'" width="440">
+</p>
+
+*The pill and drawer as they're drawn — transparent, over whatever's behind
+them. (Shown against the page background rather than a screenshot of the game,
+since these were captured outside it.)*
 
 All four are re-bindable in **Settings → Background & overlay**, which also holds
 the overlay size and the list of everything you're watching.
@@ -236,6 +257,14 @@ Notes:
 - The Claude **subscription** path needs Claude Code installed on the user's
   machine (the Agent SDK runs on it). The API-key path is fully self-contained.
 - The installer is unsigned; see `SIGNING.md` for the code-signing plan.
+
+### Publishing a release (so in-app updates find it)
+
+The app's updater reads this repo's **GitHub Releases**. Tag the release with
+the version (`v1.2`), and attach the NSIS installer — the one ending
+`-setup.exe`. The app compares its own version against the release tag, so keep
+`version` in `app/src-tauri/tauri.conf.json` in step with the tag you publish.
+Nothing else is required: no update manifest, no signing key.
 
 ## Contributing
 
