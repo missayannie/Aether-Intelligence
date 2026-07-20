@@ -270,12 +270,17 @@ html.overlay-window #root {
   flex: none;
 }
 
-/* The ask group's resize grip — bottom-right, like a window corner. */
+/* The ask group's resize grip — pinned to the group's bottom-right corner so
+   it stays on the edge whatever size the surfaces are given. */
+.ov-ask {
+  position: absolute;   /* also the containing block for the grip below */
+}
 .ov-resize {
-  align-self: flex-end;
+  position: absolute;
+  right: 0;
+  bottom: -4px;
   width: 14px;
   height: 14px;
-  margin-top: -6px;
   cursor: nwse-resize;
   border-right: 2px solid rgba(230, 192, 96, 0.55);
   border-bottom: 2px solid rgba(230, 192, 96, 0.55);
@@ -317,6 +322,24 @@ html.overlay-window #root {
 .ov-hist-msg.assistant {
   align-self: flex-start;
   color: #c6cfdf;
+}
+.ov-hist-empty {
+  color: #9aa7c0;
+  font-size: 12px;
+  font-style: italic;
+}
+/* Actions for the newest answer, directly under the conversation. */
+.ov-answer-foot {
+  background: rgba(13, 20, 36, 0.78);
+  border: 1px solid #2a3552;
+  border-left: 3px solid #e6c060;
+  border-radius: 10px;
+  padding: 6px 10px;
+  backdrop-filter: blur(6px);
+}
+.ov-answer-foot .ov-card-foot {
+  margin-top: 0;
+  flex-wrap: wrap;
 }
 
 /* --- "Watching on overlay" management list (renders in the MAIN window's

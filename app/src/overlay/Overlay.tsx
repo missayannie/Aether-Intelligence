@@ -523,13 +523,28 @@ function Overlay() {
   // Previous turns under the pill — refreshed on each summon, and again when
   // a streaming answer finishes so the newest exchange shows up.
   const [history, setHistory] = useState<{ role: string; content: string }[]>([]);
+  // The turn in flight, shown at the end of the conversation until the stored
+  // history catches up (which is what stops the answer appearing twice).
+  const [liveQ, setLiveQ] = useState("");
   const historyRef = useRef<HTMLDivElement>(null);
+  const liveTurn = [
+    ...(liveQ ? [{ role: "user", content: liveQ }] : []),
+    ...(card?.text ? [{ role: "assistant", content: card.text }] : []),
+  ];
   useEffect(() => {
-    if (expanded) void fetchHistory().then(setHistory);
-  }, [expanded, card?.done]);
+    if (!expanded) return;
+    void fetchHistory().then((h) => {
+      setHistory(h);
+      // Hand off: the backend now owns this exchange, so drop the live copy.
+      if (card?.done) {
+        setLiveQ("");
+        setCard((c) => (c ? { ...c, text: "" } : c));
+      }
+    });
+  }, [expanded, card?.done]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     historyRef.current?.scrollTo(0, historyRef.current.scrollHeight);
-  }, [history]);
+  }, [history, card?.text]);
 
   // Widget scale: apply on mount, then re-apply when Settings changes it —
   // via the Tauri broadcast (packaged app) or the storage event (web dev).
@@ -561,6 +576,7 @@ function Overlay() {
       e.currentTarget.value = "";
       setHovered(false);
       setArmed(false);
+      setLiveQ(q);
       // The pill STAYS open (follow-ups keep the rolling chat's context); the
       // answer streams into the card below. Esc/click-away still collapses —
       // the stream keeps going and the card keeps updating, just ambient.
@@ -697,36 +713,40 @@ function Overlay() {
           )}
         </div>
 
-        {expanded && history.length > 0 && size.h > 0 && (
+        {/* ONE conversation surface. The answer streams into this box as the
+            newest message — it used to also appear in a separate card, which
+            showed the same text twice and then vanished. `live` is the turn
+            in flight; once the backend has stored it, the refreshed history
+            carries it and the live copy is dropped. */}
+        {expanded && size.h > 0
+          && (liveTurn.length > 0 || history.length > 0 || keepOpen) && (
           <div className="ov-history" ref={historyRef}
-               style={{ width: size.w, maxHeight: size.h }}>
-            {history.map((m, i) => (
+               style={{ width: size.w, maxHeight: size.h, minHeight: keepOpen ? 60 : undefined }}
+               onMouseEnter={() => setHovered(true)}
+               onMouseLeave={() => setHovered(false)}>
+            {[...history, ...liveTurn].map((m, i) => (
               <div key={i} className={"ov-hist-msg " + m.role}>
                 {plainText(m.content)}
               </div>
             ))}
-          </div>
-        )}
-
-        {card && (
-          <div
-            className="ov-card"
-            style={{ width: size.w }}
-            onMouseEnter={() => setHovered(true)}
-            onMouseLeave={() => setHovered(false)}
-          >
-            {card.status && (
+            {!history.length && !liveTurn.length && (
+              <div className="ov-hist-empty">Ask something — answers land here.</div>
+            )}
+            {card?.status && (
               <div className="ov-card-status">
                 <span className="ov-spin" />
                 {card.status}
               </div>
             )}
-            {card.error ? (
-              <div className="ov-card-err">{card.error}</div>
-            ) : (
-              card.text && <div className="ov-card-body">{plainText(card.text)}</div>
-            )}
-            {card.done && !card.error && (card.place || card.sources.length > 0) && (
+            {card?.error && <div className="ov-card-err">{card.error}</div>}
+          </div>
+        )}
+
+        {/* Actions for the latest answer sit under the conversation, not in a
+            card of their own. */}
+        {expanded && card?.done && !card.error && (card.place || card.sources.length > 0) && (
+          <div className="ov-answer-foot" style={{ width: size.w }}>
+            {(
               <div className="ov-card-foot">
                 {card.place && (
                   <button
