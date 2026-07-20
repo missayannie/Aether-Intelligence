@@ -1216,8 +1216,14 @@ def overlay_checklist_toggle(body: ChecklistToggleBody):
 
 # ---------- In-app updates (GitHub Releases) ----------
 @app.get("/update/check")
-def update_check(current: str = ""):
-    """The newest published release, compared against the running app."""
+def update_check(current: str = "", since: str = ""):
+    """The newest published release, compared against the running app.
+
+    `since` is the asset timestamp this install came from. It lets a REBUILD
+    of the same version be offered: re-attaching an installer to an existing
+    tag leaves the version string alone, so a version comparison alone would
+    call it "up to date" forever.
+    """
     import updates
     try:
         rel = updates.latest_release()
@@ -1225,8 +1231,13 @@ def update_check(current: str = ""):
         raise HTTPException(502, f"Couldn't reach GitHub: {exc}") from exc
     if not rel:
         return {"found": False, "current": current}
+    newer = updates.is_newer(rel.version, current) if current else False
+    rebuilt = bool(
+        not newer and current and rel.version == updates._norm(current)
+        and since and rel.asset_updated_at and rel.asset_updated_at > since
+    )
     return {"found": True, "current": current,
-            "newer": updates.is_newer(rel.version, current) if current else False,
+            "newer": newer or rebuilt, "rebuilt": rebuilt,
             **updates.as_dict(rel)}
 
 

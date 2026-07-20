@@ -203,8 +203,11 @@ export type OverlayChecklist = {
 // In-app updates, read from the project's GitHub Releases.
 export type UpdateInfo = {
   found: boolean; current: string; newer?: boolean;
+  // True when the release carries the SAME version but a newer installer
+  // upload than the one this install came from (a rebuild of the same tag).
+  rebuilt?: boolean;
   version?: string; tag?: string; name?: string; notes?: string;
-  url?: string; size?: number; published_at?: string;
+  url?: string; size?: number; published_at?: string; asset_updated_at?: string;
 };
 export type UpdateStatus = {
   status: "idle" | "downloading" | "ready" | "error";
@@ -424,8 +427,9 @@ export const api = {
     }),
 
   // In-app updates, from the project's GitHub Releases.
-  updateCheck: (current: string) =>
-    j<UpdateInfo>(`/update/check?current=${encodeURIComponent(current)}`),
+  updateCheck: (current: string, since = "") =>
+    j<UpdateInfo>(`/update/check?current=${encodeURIComponent(current)}`
+      + `&since=${encodeURIComponent(since)}`),
   updateDownload: () =>
     j<{ ok: boolean; version: string }>("/update/download", { method: "POST" }),
   updateStatus: () => j<UpdateStatus>("/update/status"),

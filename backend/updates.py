@@ -39,6 +39,10 @@ class Release:
     url: str              # the installer asset
     size: int
     published_at: str
+    # When the INSTALLER asset was last uploaded. Re-attaching a new build to
+    # an existing tag moves this even though the version string doesn't, which
+    # is how a same-version rebuild is detected.
+    asset_updated_at: str = ""
 
 
 def _norm(v: str) -> str:
@@ -89,6 +93,7 @@ def latest_release(timeout: float = 20.0) -> Release | None:
         url=url,
         size=int(asset.get("size") or 0),
         published_at=d.get("published_at") or "",
+        asset_updated_at=asset.get("updated_at") or asset.get("created_at") or "",
     )
 
 

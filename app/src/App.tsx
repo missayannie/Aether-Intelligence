@@ -856,7 +856,7 @@ export default function App() {
       try {
         const { getVersion } = await import("@tauri-apps/api/app");
         const cur = await getVersion();
-        const info = await api.updateCheck(cur);
+        const info = await api.updateCheck(cur, readStamp());
         if (cancelled || !info.found || !info.newer || !info.version) return;
         setUpdateReady({ version: info.version });
         if (!autoInstallUpdates) return;
@@ -867,6 +867,7 @@ export default function App() {
           if (s.status === "ready") {
             window.clearInterval(poll);
             const { invoke } = await import("@tauri-apps/api/core");
+            markStamp(info.asset_updated_at);
             await invoke("install_update", { path: s.path, silent: false })
               .catch(() => {});
           } else if (s.status === "error") {
@@ -3801,6 +3802,18 @@ function OverlayWatchList() {
   );
 }
 
+/* The installer-upload time this install came from. A rebuild published under
+ * an existing tag keeps the same version string, so a version comparison alone
+ * would report "up to date" forever; remembering the asset's timestamp is what
+ * lets the same version be offered again when it's genuinely a newer build. */
+const STAMP_KEY = "installedAssetStamp";
+export const readStamp = (): string => {
+  try { return localStorage.getItem(STAMP_KEY) || ""; } catch { return ""; }
+};
+export const markStamp = (s?: string): void => {
+  try { if (s) localStorage.setItem(STAMP_KEY, s); } catch { /* private mode */ }
+};
+
 /** Check GitHub Releases, download the installer, run it. Download and install
  * stay two explicit steps unless "install automatically" is on — this replaces
  * the running program, so it shouldn't happen by surprise. */
@@ -3815,6 +3828,9 @@ function UpdatePanel(props: {
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  // Escape hatch for the case the stamp can't cover: a rebuild published under
+  // the same tag before this install started recording one.
+  const [reinstall, setReinstall] = useState(false);
 
   useEffect(() => {
     import("@tauri-apps/api/app")
@@ -3826,6 +3842,9 @@ function UpdatePanel(props: {
   const install = async (path: string) => {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
+      // Record which upload we're about to become, before handing off — the
+      // app is replaced from here and won't get another chance to write it.
+      markStamp(info?.asset_updated_at);
       // Not silent: the installer's own window is the last confirmation before
       // it replaces the app, and it restarts cleanly afterwards.
       await invoke("install_update", { path, silent: false });
@@ -3835,9 +3854,9 @@ function UpdatePanel(props: {
   };
 
   const check = async () => {
-    setBusy(true); setErr(""); setInfo(null);
+    setBusy(true); setErr(""); setInfo(null); setReinstall(false);
     try {
-      setInfo(await api.updateCheck(current));
+      setInfo(await api.updateCheck(current, readStamp()));
     } catch (e) {
       setErr(String(e));
     }
@@ -3874,7 +3893,9 @@ function UpdatePanel(props: {
           Version {current || "—"}
           {info?.found && info.version && (
             <span className="upd-latest">
-              {info.newer ? ` · ${info.version} available` : " · up to date"}
+              {info.rebuilt ? ` · newer build of ${info.version} available`
+                : info.newer ? ` · ${info.version} available`
+                : " · up to date"}
             </span>
           )}
         </span>
@@ -3883,9 +3904,21 @@ function UpdatePanel(props: {
         </button>
       </div>
 
-      {info?.found && info.newer && (
+      {info?.found && !info.newer && !reinstall && (
+        <button className="upd-again" onClick={() => setReinstall(true)}>
+          Reinstall {info.tag || info.version} anyway
+        </button>
+      )}
+
+      {info?.found && (info.newer || reinstall) && (
         <div className="upd-rel">
           <div className="upd-name">{info.name || info.tag}</div>
+          {info.rebuilt && (
+            <div className="upd-note">
+              Same version, but the installer on this release was replaced with a
+              newer build.
+            </div>
+          )}
           {info.notes && <div className="upd-notes">{info.notes.slice(0, 400)}</div>}
           {status?.status === "downloading" ? (
             <div className="upd-prog"><div style={{ width: `${status.pct}%` }} /></div>
