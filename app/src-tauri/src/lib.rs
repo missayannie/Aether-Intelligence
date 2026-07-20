@@ -33,6 +33,47 @@ fn show_main(app: &AppHandle) {
     }
 }
 
+/// Run a downloaded installer and quit so it can replace us.
+///
+/// Guarded on purpose — this executes a binary. The path must be the file the
+/// BACKEND downloaded: inside the app-data `updates` directory, named the way
+/// updates.py names it, and an .exe that exists. Anything else is refused, so
+/// a stray path from the frontend (or anywhere else) can't run arbitrary code.
+/// `silent` maps to the NSIS /S flag; the app exits either way.
+#[tauri::command]
+fn install_update(app: AppHandle, path: String, silent: bool) -> Result<(), String> {
+    use std::path::Path;
+    let p = Path::new(&path);
+    let name_ok = p
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.starts_with("AetherIntelligence-") && n.ends_with("-setup.exe"))
+        .unwrap_or(false);
+    let dir_ok = p
+        .parent()
+        .and_then(|d| d.file_name())
+        .and_then(|d| d.to_str())
+        .map(|d| d.eq_ignore_ascii_case("updates"))
+        .unwrap_or(false);
+    if !name_ok || !dir_ok || !p.is_file() {
+        return Err("Refusing to run that path — not a downloaded installer.".into());
+    }
+    let mut cmd = std::process::Command::new(p);
+    if silent {
+        // NSIS silent install, then relaunch.
+        cmd.args(["/S"]);
+    }
+    cmd.spawn().map_err(err_str)?;
+    // Give the installer a moment to start before we release our files.
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        kill_backend(&handle);
+        handle.exit(0);
+    });
+    Ok(())
+}
+
 #[tauri::command]
 fn set_close_to_tray(app: AppHandle, enabled: bool) {
     if let Some(s) = app.try_state::<CloseToTray>() {
@@ -421,7 +462,8 @@ pub fn run() {
             overlay::overlay_click_at,
             overlay::overlay_open_db,
             set_close_to_tray,
-            set_overlay_hotkeys
+            set_overlay_hotkeys,
+            install_update
         ])
         .manage(BackendProcess(Mutex::new(None)))
         .manage(CloseToTray(std::sync::atomic::AtomicBool::new(false)))

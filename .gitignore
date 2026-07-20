@@ -68,5 +68,7 @@ game_version.json
 map_pins.json
 # the player's armed in-game overlay chips (nodes/pins they're watching)
 overlay_watches.json
+# installers fetched by the in-app updater (~150MB each)
+updates/
 data/
 output/

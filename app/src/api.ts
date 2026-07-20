@@ -193,6 +193,17 @@ export type OverlayWatch = {
   created_at?: string;
 };
 
+// In-app updates, read from the project's GitHub Releases.
+export type UpdateInfo = {
+  found: boolean; current: string; newer?: boolean;
+  version?: string; tag?: string; name?: string; notes?: string;
+  url?: string; size?: number; published_at?: string;
+};
+export type UpdateStatus = {
+  status: "idle" | "downloading" | "ready" | "error";
+  pct: number; path: string; error: string; version: string;
+};
+
 export type OverlayTimer = {
   id: string;          // the watch id
   timed: boolean;
@@ -393,6 +404,13 @@ export const api = {
   listChats: () => j<{ chats: ChatSummary[] }>("/chats"),
   // Overlay watches — the passive chips' data (pins/pinsets armed from answer
   // cards or the app; docs/overlay-spec.md §6.3).
+  // In-app updates, from the project's GitHub Releases.
+  updateCheck: (current: string) =>
+    j<UpdateInfo>(`/update/check?current=${encodeURIComponent(current)}`),
+  updateDownload: () =>
+    j<{ ok: boolean; version: string }>("/update/download", { method: "POST" }),
+  updateStatus: () => j<UpdateStatus>("/update/status"),
+
   overlayWatches: () => j<{ watches: OverlayWatch[] }>("/overlay/watches"),
   overlayWatchAdd: (w: Omit<OverlayWatch, "id" | "created_at">) =>
     j<{ ok: boolean; watch: OverlayWatch }>("/overlay/watches", {
