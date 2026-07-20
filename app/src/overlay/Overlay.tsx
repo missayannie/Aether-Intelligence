@@ -214,6 +214,9 @@ const readKeepOpen = () => localStorage.getItem(KEEP_KEY) === "1";
 // The ask group's size, dragged from its bottom-right grip and remembered.
 const SIZE_KEY = "ov-ask-size";
 const DEFAULT_SIZE = { w: 340, h: 190 };
+// Never shrink past half the default — below that the pill can't show its
+// controls and the history is unreadable.
+const MIN_SIZE = { w: DEFAULT_SIZE.w / 2, h: DEFAULT_SIZE.h / 2 };
 function readSize(): { w: number; h: number } {
   try {
     const v = JSON.parse(localStorage.getItem(SIZE_KEY) || "null");
@@ -283,8 +286,8 @@ function Overlay() {
     const start = readSize();
     const move = (ev: PointerEvent) => {
       setSize({
-        w: Math.round(clamp(start.w + (ev.screenX - sx) / zoom, 240, 900)),
-        h: Math.round(clamp(start.h + (ev.screenY - sy) / zoom, 0, 700)),
+        w: Math.round(clamp(start.w + (ev.screenX - sx) / zoom, MIN_SIZE.w, 900)),
+        h: Math.round(clamp(start.h + (ev.screenY - sy) / zoom, MIN_SIZE.h, 700)),
       });
     };
     const up = () => {
@@ -491,16 +494,20 @@ function Overlay() {
     return () => window.removeEventListener("keydown", onWinKey, true);
   }, [expanded, drawerOpen, activeInput]);
 
-  // LAST RESORT for focus: if the polite grabs haven't landed OS keyboard
-  // focus shortly after summon (the Rust side retries through ~300ms), ask
-  // the shell to synthesize a real click on the input — the one thing Windows
-  // never refuses. The overlay holds cursor capture, so the game never sees it.
+  // Typing must work the instant a hotkey opens a surface. Asking politely
+  // (set_focus, AttachThreadInput, synthetic ALT) is unreliable over a
+  // fullscreen game, so we ALWAYS do the thing Windows never refuses: have
+  // the shell click our own input. This used to run only as a late fallback
+  // when focus "looked" wrong, and document.hasFocus() lies often enough that
+  // the player was left clicking the box by hand. The overlay holds cursor
+  // capture and the cursor is put back, so the game never sees the click.
   useEffect(() => {
     if ((!expanded && !drawerOpen) || !IN_TAURI) return;
-    const t = window.setTimeout(async () => {
+    let cancelled = false;
+
+    const clickInput = async () => {
       const inp = activeInput();
-      if (!inp) return;
-      if (document.hasFocus() && document.activeElement === inp) return;
+      if (!inp || cancelled) return;
       try {
         const [{ invoke }, { getCurrentWebviewWindow }] = await Promise.all([
           import("@tauri-apps/api/core"),
@@ -513,11 +520,24 @@ function Overlay() {
           x: pos.x + (r.left + r.width / 2) * dpr,
           y: pos.y + (r.top + r.height / 2) * dpr,
         });
+        inp.focus();
       } catch (e) {
-        console.error("focus click fallback failed", e);
+        console.error("focus click failed", e);
       }
-    }, 500);
-    return () => window.clearTimeout(t);
+    };
+
+    // Once the surface has laid out, then once more in case the game clawed
+    // focus back during those first frames.
+    const t1 = window.setTimeout(clickInput, 130);
+    const t2 = window.setTimeout(() => {
+      const inp = activeInput();
+      if (inp && document.activeElement !== inp) void clickInput();
+    }, 650);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+    };
   }, [expanded, drawerOpen, activeInput]);
 
   // Previous turns under the pill — refreshed on each summon, and again when
@@ -660,7 +680,11 @@ function Overlay() {
              onPointerDown={() => softDismiss(collapse)} />
       )}
       <div className="ov-ask" ref={ask.ref} style={ask.style}>
-        <div className={"ov-pill" + (expanded ? " open" : "")}>
+        {/* The pill tracks the chat window's width so the resize grip lines up
+            with BOTH — it used to keep its own content width, leaving the grip
+            hanging off the wider of the two. Collapsed it stays a small dot. */}
+        <div className={"ov-pill" + (expanded ? " open" : "")}
+             style={expanded ? { width: size.w } : undefined}>
           <span
             className="ov-mark"
             onPointerDown={ask.onPointerDown}
