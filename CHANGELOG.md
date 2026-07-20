@@ -1,5 +1,51 @@
 # Changelog
 
+## v1.1.2
+
+Overlay polish and fixes, on top of v1.1.1.
+
+### New
+
+- **Bigger map markers.** Game markers, node/temp/custom pins and typed pin
+  icons are all substantially larger — they hold a constant on-screen size at
+  any zoom, so this is what you actually see.
+- **Keep overlay surfaces open** (Settings → Background & overlay). Answer
+  cards stop fading on their own, and clicking away no longer closes the Ask
+  pill or the database drawer — it hands the mouse back to the game and leaves
+  them standing. With it on, the pill and the drawer (search box included) can
+  be open at the same time instead of replacing each other. Esc and the kill
+  switch still close them.
+- **The guide checklist** (overlay concept 2). Pin a doc with **✦ Overlay** in
+  its editor toolbar and its steps appear on the overlay: current step
+  highlighted, done steps struck through, progress counted. Ticking a step in
+  game writes straight back into the doc, so the app and the overlay never
+  disagree. Both checkbox styles these guides use are supported — task lines
+  and checkboxes inside guide tables — in the app's exact render order.
+- **Resizable chat surface.** Drag the grip at the bottom-right of the Ask pill
+  to size the card and history; the size is remembered.
+- **New overlay chat.** A ✚ button in the pill starts a fresh thread instead of
+  continuing the rolling one.
+- **The database drawer shows the whole record** — stats, market and vendor
+  price, materia slots, ventures, plus grouped cross-links (gathering nodes,
+  who sells it, what it upgrades to, what it's used in, and a record's own
+  rewards and unlocks). Every one opens that record in the main app.
+
+### Fixed
+
+- **The agent's thinking no longer leaks into answers.** Text the model emits
+  between tool calls ("Let me try a different search:") was being concatenated
+  with the real answer, on the card and in the pill's history. Only what
+  follows the last tool call is kept now, in the stored message as well as on
+  screen.
+- **Dragging the pill no longer jumps.** Deferred re-layout passes were firing
+  mid-drag and snapping the widget back to its saved position.
+- **Hotkeys no longer flip-flop.** Pressing `` Alt+` `` and `Alt+D` in quick
+  succession made surfaces swap back and forth by themselves: a delayed retry
+  meant to cover a still-loading window was re-firing after you had already
+  switched. It now only runs when that keypress created the window.
+- Overlay chats moved to a collapsed **✦ Overlay** section at the bottom of the
+  sidebar — click to expand — instead of sitting among your real chats.
+
 ## v1.1.1
 
 Everything below is new since **v1.0**. (v1.1 shipped a build from the same code

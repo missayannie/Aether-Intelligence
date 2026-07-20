@@ -1042,9 +1042,12 @@ a[href^="http"]:hover { text-decoration: underline; filter: brightness(1.15); }
   position: absolute; transform-origin: 0 0; display: flex; align-items: center;
   gap: 3px; white-space: nowrap; pointer-events: none;
 }
-.gm-ico { width: 22px; height: 22px; margin: -11px 0 0 -11px; }
+/* Markers hold a constant SCREEN size (each is scaled by 1/zoom), so these
+   values are what you actually see — sized to stay readable on a large
+   display rather than to match the game's own tiny map icons. */
+.gm-ico { width: 32px; height: 32px; margin: -16px 0 0 -16px; }
 .gm-pin {
-  width: 11px; height: 11px; margin: -5px 0 0 -5px; border-radius: 50%;
+  width: 15px; height: 15px; margin: -7px 0 0 -7px; border-radius: 50%;
   background: #e6b800; border: 2px solid #1a1400; box-shadow: 0 0 0 1px #e6b80088;
 }
 /* Fallback for a GAME marker whose icon didn't load: a tiny black dot — clearly
@@ -1053,11 +1056,11 @@ a[href^="http"]:hover { text-decoration: underline; filter: brightness(1.15); }
   width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%;
   background: #1a1a1a; box-shadow: 0 0 0 1px #ffffffcc;
 }
-.gm-marker.k-node .gm-pin { width: 14px; height: 14px; margin: -7px 0 0 -7px; }
+.gm-marker.k-node .gm-pin { width: 19px; height: 19px; margin: -9px 0 0 -9px; }
 /* A temporary pin (agent answer / chat map-link): pulses so it reads as "look
    here now", visually distinct from the player's saved pins. */
 .gm-pin.temp {
-  width: 14px; height: 14px; margin: -7px 0 0 -7px;
+  width: 19px; height: 19px; margin: -9px 0 0 -9px;
   animation: gm-pulse 1.6s ease-in-out infinite;
 }
 @keyframes gm-pulse {
@@ -1068,7 +1071,7 @@ a[href^="http"]:hover { text-decoration: underline; filter: brightness(1.15); }
    removes them, and the draft carries a label input) — everything else stays
    pointer-transparent so panning works through it. */
 .gm-marker.k-custom { pointer-events: auto; }
-.gm-pin.custom { width: 14px; height: 14px; margin: -7px 0 0 -7px; box-shadow: 0 0 6px #e6b800cc; }
+.gm-pin.custom { width: 19px; height: 19px; margin: -9px 0 0 -9px; box-shadow: 0 0 6px #e6b800cc; }
 .gm-pin-input {
   font: 600 12px "Segoe UI", system-ui, sans-serif; width: 170px;
   padding: 3px 7px; border-radius: 6px; border: 1px solid #e6b800;
@@ -1417,7 +1420,7 @@ a[href^="http"]:hover { text-decoration: underline; filter: brightness(1.15); }
 /* A typed temp marker: the game's own map symbol instead of the plain dot.
    Centred with negative margins, same convention as .gm-ico/.gm-pin. */
 .gm-pin-icon {
-  width: 26px; height: 26px; margin: -13px 0 0 -13px; display: block;
+  width: 36px; height: 36px; margin: -18px 0 0 -18px; display: block;
   filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .6));
 }
 /* A game symbol inline in chat/doc text (`icon:<name>`): text-sized, baseline-ish. */

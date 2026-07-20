@@ -54,9 +54,11 @@ fn restore_foreground() {
 /// positioned/sized in PHYSICAL pixels from the monitor (the builder's
 /// position/inner_size are logical and would land wrong above 100% scaling —
 /// same lesson as browser_show in lib.rs), then shown.
-fn ensure_window(app: &AppHandle, boot: &str) -> Result<WebviewWindow, String> {
+/// Returns the overlay window and whether THIS call created it — callers use
+/// that to decide if a late "open your surface" retry is warranted.
+fn ensure_window(app: &AppHandle, boot: &str) -> Result<(WebviewWindow, bool), String> {
     if let Some(w) = app.get_webview_window(OVERLAY_LABEL) {
-        return Ok(w);
+        return Ok((w, false));
     }
     let monitor = app
         .primary_monitor()
@@ -99,7 +101,7 @@ fn ensure_window(app: &AppHandle, boot: &str) -> Result<WebviewWindow, String> {
         }
     }
     w.show().map_err(crate::err_str)?;
-    Ok(w)
+    Ok((w, true))
 }
 
 /// Screen awareness (§6.5): one JPEG data-URL of the primary monitor, sized
@@ -205,19 +207,23 @@ fn capture_screen_jpeg() -> Result<String, String> {
 /// hotkey is the one failure the user can't see past.
 pub fn summon_ask(app: &AppHandle) {
     match ensure_window(app, "summon=1") {
-        Ok(w) => {
+        Ok((w, created)) => {
             let _ = w.show();
             let _ = app.emit("overlay://summon-ask", ());
             let _ = w.eval("window.__aetherOverlaySummon && window.__aetherOverlaySummon()");
-            // One delayed retry: covers a window whose page was still loading
-            // when the instant channels fired (the "hotkey shows the ambient
-            // layer but no pill" failure). Idempotent — expanding twice is a
-            // no-op.
-            let w2 = w.clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(700));
-                let _ = w2.eval("window.__aetherOverlaySummon && window.__aetherOverlaySummon()");
-            });
+            // A late retry ONLY when this call created the window (its page
+            // may still have been loading). Retrying on an existing window
+            // re-opened the pill ~700ms after the player had already switched
+            // to the drawer, which looked like the overlay flip-flopping on
+            // its own.
+            if created {
+                let w2 = w.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(700));
+                    let _ = w2.eval(
+                        "window.__aetherOverlaySummon && window.__aetherOverlaySummon()");
+                });
+            }
         }
         Err(e) => eprintln!("[overlay] create failed: {e}"),
     }
@@ -227,15 +233,18 @@ pub fn summon_ask(app: &AppHandle) {
 /// without leaving the game. Same dual-channel delivery as the pill.
 pub fn summon_drawer(app: &AppHandle) {
     match ensure_window(app, "drawer=1") {
-        Ok(w) => {
+        Ok((w, created)) => {
             let _ = w.show();
             let _ = app.emit("overlay://summon-drawer", ());
             let _ = w.eval("window.__aetherOverlayDrawer && window.__aetherOverlayDrawer()");
-            let w2 = w.clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(700));
-                let _ = w2.eval("window.__aetherOverlayDrawer && window.__aetherOverlayDrawer()");
-            });
+            if created {
+                let w2 = w.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(700));
+                    let _ = w2.eval(
+                        "window.__aetherOverlayDrawer && window.__aetherOverlayDrawer()");
+                });
+            }
         }
         Err(e) => eprintln!("[overlay] create failed: {e}"),
     }
@@ -245,7 +254,7 @@ pub fn summon_drawer(app: &AppHandle) {
 /// opening the pill. The quiet way in.
 pub fn show_ambient(app: &AppHandle) {
     match ensure_window(app, "") {
-        Ok(w) => {
+        Ok((w, _)) => {
             let _ = w.show();
         }
         Err(e) => eprintln!("[overlay] create failed: {e}"),

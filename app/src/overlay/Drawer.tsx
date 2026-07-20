@@ -13,8 +13,11 @@ type Detail =
   | { kind: "record"; doc: DbDetailDoc }
   | { kind: "item"; item: DbItem; hit: DbHit };
 
-export default function Drawer({ onClose, dragRef, dragStyle, onDragStart }: {
+export default function Drawer({ onClose, onClickAway, dragRef, dragStyle, onDragStart }: {
   onClose: () => void;
+  // Click-away is separate from close: with "keep overlay open" on it hands
+  // the mouse back to the game but leaves the drawer standing.
+  onClickAway: () => void;
   dragRef: React.RefObject<HTMLDivElement | null>;
   dragStyle?: React.CSSProperties;
   onDragStart: (e: React.PointerEvent) => void;
@@ -122,14 +125,22 @@ export default function Drawer({ onClose, dragRef, dragStyle, onDragStart }: {
     }
   };
 
-  const openInApp = async () => {
-    if (!IN_TAURI || !detail) return;
+  /** Open a record in the MAIN app. Called for the open record itself and for
+   * every cross-link in the detail, so anything named here is one click from
+   * its full page. */
+  const openInApp = async (kind?: string, id?: string) => {
+    if (!IN_TAURI) return;
+    const [k, i] = kind && id
+      ? [kind, id]
+      : detail?.kind === "record"
+        ? [detail.doc.kind, detail.doc.id]
+        : detail?.kind === "item"
+          ? ["item", detail.hit.id]
+          : [null, null];
+    if (!k || !i) return;
     const { invoke } = await import("@tauri-apps/api/core");
-    const [kind, id] = detail.kind === "record"
-      ? [detail.doc.kind, detail.doc.id]
-      : ["item", detail.hit.id];
     try {
-      await invoke("overlay_open_db", { kind, id });
+      await invoke("overlay_open_db", { kind: k, id: i });
     } catch (e) {
       console.error("open in app failed", e);
     }
@@ -161,7 +172,7 @@ export default function Drawer({ onClose, dragRef, dragStyle, onDragStart }: {
           summoned window silently ate every click ("the screen froze") —
           now clicking anywhere outside closes the drawer and hands the
           mouse straight back to the game. */}
-      <div className="ov-drawer-backdrop" onPointerDown={onClose} />
+      <div className="ov-drawer-backdrop" onPointerDown={onClickAway} />
       <div className="ov-drawer" ref={dragRef} style={dragStyle} onKeyDown={onKey}>
       <div className="ov-drawer-head">
         <span
@@ -191,11 +202,11 @@ export default function Drawer({ onClose, dragRef, dragStyle, onDragStart }: {
                 {detail.doc.sub && <span className="ov-drawer-sub">{detail.doc.sub}</span>}
               </div>
               {detail.doc.description && (
-                <div className="ov-drawer-desc">{plainText(detail.doc.description).slice(0, 280)}</div>
+                <div className="ov-drawer-desc">{plainText(detail.doc.description)}</div>
               )}
               {!!detail.doc.fields?.length && (
                 <div className="ov-drawer-fields">
-                  {detail.doc.fields.slice(0, 6).map((f) => (
+                  {detail.doc.fields.filter((f) => f.value).map((f) => (
                     <span key={f.label}><b>{f.label}</b> {f.value}</span>
                   ))}
                 </div>
@@ -208,6 +219,24 @@ export default function Drawer({ onClose, dragRef, dragStyle, onDragStart }: {
                     : ""}
                 </div>
               )}
+              {/* Cross-references — rewards, the quest giver, what unlocks it.
+                  Each opens that record in the main app. */}
+              {detail.doc.links?.filter((g) => g.refs?.length).map((g) => (
+                <div className="ov-drawer-group" key={g.group}>
+                  <div className="ov-drawer-group-h">{g.group}</div>
+                  <div className="ov-drawer-refs">
+                    {g.refs.map((r) => (
+                      <button key={r.kind + r.id} className="ov-drawer-ref"
+                              title={`Open ${r.name} in the app`}
+                              onClick={() => void openInApp(r.kind, r.id)}>
+                        {r.icon && <img src={r.icon} alt="" loading="lazy" />}
+                        <span>{r.name}</span>
+                        {r.sub && <em>{r.sub}</em>}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
             </>
           ) : (
             <>
@@ -218,19 +247,101 @@ export default function Drawer({ onClose, dragRef, dragStyle, onDragStart }: {
                   <span className="ov-drawer-sub">i{detail.item.item_level}</span>
                 )}
               </div>
-              {detail.item.description && (
-                <div className="ov-drawer-desc">{plainText(detail.item.description).slice(0, 280)}</div>
+              {(detail.item.category || detail.item.patch) && (
+                <div className="ov-drawer-sub">
+                  {[detail.item.category, detail.item.patch && `Patch ${detail.item.patch}`]
+                    .filter(Boolean).join(" · ")}
+                </div>
               )}
-              {!!detail.item.nodes?.length && (
+              {detail.item.description && (
+                <div className="ov-drawer-desc">{plainText(detail.item.description)}</div>
+              )}
+
+              {/* Stats, and the numbers you'd otherwise open the app for. */}
+              {!!detail.item.attributes && Object.keys(detail.item.attributes).length > 0 && (
                 <div className="ov-drawer-fields">
-                  <span><b>Gathered</b> {detail.item.nodes.slice(0, 3)
-                    .map((n) => `${n.name}${n.zone ? ` (${n.zone})` : ""}`).join(" · ")}</span>
+                  {Object.entries(detail.item.attributes).slice(0, 8).map(([k, v]) => (
+                    <span key={k}><b>{k}</b> {v}</span>
+                  ))}
+                </div>
+              )}
+              <div className="ov-drawer-fields">
+                {detail.item.market && (
+                  <span>
+                    <b>Market</b> {detail.item.market.lowest.toLocaleString()} gil
+                    {detail.item.market.world ? ` · ${detail.item.market.world}` : ""}
+                    {detail.item.market.listings
+                      ? ` (${detail.item.market.listings} listings)` : ""}
+                  </span>
+                )}
+                {!!detail.item.sell_price && (
+                  <span><b>Vendor</b> sells for {detail.item.sell_price.toLocaleString()} gil</span>
+                )}
+                {!!detail.item.materia_slots && (
+                  <span><b>Materia</b> {detail.item.materia_slots} slots</span>
+                )}
+                {!!detail.item.ventures?.length && (
+                  <span><b>Ventures</b> {detail.item.ventures.length} retainer venture(s)</span>
+                )}
+              </div>
+
+              {/* How you get one — each node opens the zone map in the app. */}
+              {!!detail.item.nodes?.length && (
+                <div className="ov-drawer-group">
+                  <div className="ov-drawer-group-h">Gathering</div>
+                  <div className="ov-drawer-refs">
+                    {detail.item.nodes.map((nd) => (
+                      <button key={nd.id} className="ov-drawer-ref"
+                              title={`Open ${nd.name} in the app`}
+                              onClick={() => void openInApp("node", nd.id)}>
+                        <span>{nd.name}</span>
+                        <em>{[nd.zone, nd.level ? `Lv ${nd.level}` : "", nd.type]
+                          .filter(Boolean).join(" · ")}</em>
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
               {!!detail.item.vendors?.length && (
-                <div className="ov-drawer-fields">
-                  <span><b>Sold by</b> {detail.item.vendors.slice(0, 3)
-                    .map((v) => v.name).join(" · ")}</span>
+                <div className="ov-drawer-group">
+                  <div className="ov-drawer-group-h">Sold by</div>
+                  <div className="ov-drawer-refs">
+                    {detail.item.vendors.map((v) => (
+                      <button key={v.id} className="ov-drawer-ref"
+                              title={`Open ${v.name} in the app`}
+                              onClick={() => void openInApp("npc", v.id)}>
+                        <span>{v.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {!!detail.item.upgrades?.length && (
+                <div className="ov-drawer-group">
+                  <div className="ov-drawer-group-h">Upgrades to</div>
+                  <div className="ov-drawer-refs">
+                    {detail.item.upgrades.map((u) => (
+                      <button key={u.id} className="ov-drawer-ref"
+                              onClick={() => void openInApp("item", u.id)}>
+                        <span>{u.name}</span>
+                        {!!u.item_level && <em>i{u.item_level}</em>}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {!!detail.item.ingredient_of?.length && (
+                <div className="ov-drawer-group">
+                  <div className="ov-drawer-group-h">Used in</div>
+                  <div className="ov-drawer-refs">
+                    {detail.item.ingredient_of.map((i) => (
+                      <button key={i.id} className="ov-drawer-ref"
+                              onClick={() => void openInApp("item", i.id)}>
+                        <span>{i.name}</span>
+                        {!!i.qty && <em>×{i.qty}</em>}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
             </>
@@ -261,6 +372,12 @@ export default function Drawer({ onClose, dragRef, dragStyle, onDragStart }: {
             <button className="ov-card-btn" onClick={() => void openInApp()}>
               Open in app
             </button>
+            {detail.kind === "item" && !!detail.item.nodes?.length && (
+              <button className="ov-card-btn"
+                      onClick={() => void openInApp("node", detail.item.nodes![0].id)}>
+                Open node
+              </button>
+            )}
             <span className="ov-drawer-hint">Esc back</span>
           </div>
         </div>

@@ -382,7 +382,16 @@ where work lands, matching current repo layout.
 - **Milestone:** arm two node watches, observe a full window cycle (chip counts
   down → "open now" → toast → fades) against in-game truth.
 
-## Phase 4 — the guide checklist
+## Phase 4 — the guide checklist  ✅ shipped
+
+Built as described below, with one simplification: instead of inferring the
+"active doc", a doc is explicitly pinned with **✦ Overlay** in its editor
+toolbar (resolving Q5 in favour of the explicit option). Steps are parsed
+server-side in the app's own renderer order — GFM task lines AND raw
+`<input type="checkbox">` in guide tables — so a tick in game flips the same
+box the app shows, and it writes straight back into the doc.
+
+### Original plan
 
 **Goal:** the active doc's steps living under the quest list, two-way sync.
 

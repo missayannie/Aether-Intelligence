@@ -91,6 +91,13 @@ export async function armChips(place: CardPlace): Promise<OverlayWatch> {
   return r.watch;
 }
 
+/** Start a fresh overlay conversation: the next ask creates a new chat rather
+ * than continuing the rolling one, so a new topic doesn't inherit old context
+ * (or its token cost). */
+export function newChat(): void {
+  localStorage.removeItem(CHAT_KEY);
+}
+
 export async function fetchWatches(): Promise<OverlayWatch[]> {
   try {
     return (await api.overlayWatches()).watches;
@@ -137,6 +144,11 @@ export async function ask(q: string, onUpdate: (c: Card) => void,
         card.text += ev.text;
         card.status = "";
       } else if (ev.type === "tool") {
+        // Anything said BEFORE a tool call is the model thinking out loud
+        // ("Let me try a different search:") — preamble, not the answer. The
+        // card is a distilled result, so drop it and keep only what comes
+        // after the last tool call.
+        card.text = "";
         card.status = "Researching…";
       } else if (ev.type === "map") {
         card.place = { zone: ev.zone, focus: ev.focus ?? null, pin: ev.pin ?? null,

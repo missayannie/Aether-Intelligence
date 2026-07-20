@@ -214,9 +214,81 @@ html.overlay-window #root {
   font-size: 13px;
   color: #e8ecf6;
 }
+/* Detail is scrollable — a full record (stats, sources, cross-links) is
+   taller than the drawer should ever grow. */
+.ov-drawer-detail {
+  max-height: 60vh;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #2a3552 transparent;
+}
+.ov-drawer-group-h {
+  color: #9aa7c0;
+  font-size: 11.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin: 8px 0 4px;
+}
+.ov-drawer-refs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.ov-drawer-ref {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid #2a3552;
+  background: rgba(230, 192, 96, 0.06);
+  color: #e8ecf6;
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  max-width: 100%;
+}
+.ov-drawer-ref:hover {
+  border-color: rgba(230, 192, 96, 0.55);
+  background: rgba(230, 192, 96, 0.16);
+}
+.ov-drawer-ref img {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  object-fit: contain;
+}
+.ov-drawer-ref span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ov-drawer-ref em {
+  color: #9aa7c0;
+  font-style: normal;
+  font-size: 11.5px;
+  flex: none;
+}
+
+/* The ask group's resize grip — bottom-right, like a window corner. */
+.ov-resize {
+  align-self: flex-end;
+  width: 14px;
+  height: 14px;
+  margin-top: -6px;
+  cursor: nwse-resize;
+  border-right: 2px solid rgba(230, 192, 96, 0.55);
+  border-bottom: 2px solid rgba(230, 192, 96, 0.55);
+  border-bottom-right-radius: 4px;
+  opacity: 0.7;
+}
+.ov-resize:hover {
+  opacity: 1;
+}
 
 /* --- History: previous turns under the pill (summoned only) -------------- */
 .ov-history {
+  /* width/max-height come from the resize grip; these are the fallbacks. */
   width: 320px;
   max-height: 180px;
   overflow-y: auto;
@@ -288,6 +360,40 @@ html.overlay-window #root {
 .ovw-x:hover {
   opacity: 1;
   color: #e6a25a;
+}
+
+/* --- Sidebar "✦ Overlay" section (MAIN window) --------------------------- */
+.ov-section {
+  margin-top: auto;          /* pin to the bottom of the sidebar column */
+  padding-top: 6px;
+}
+.ov-section-h {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 8px;
+  background: transparent;
+  border: none;
+  border-top: 1px solid rgba(128, 140, 170, 0.22);
+  color: inherit;
+  opacity: 0.75;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+.ov-section-h:hover {
+  opacity: 1;
+}
+.ov-section-arrow {
+  font-size: 10px;
+  width: 9px;
+}
+.ov-section-count {
+  margin-left: auto;
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
 }
 
 /* --- Updates panel (renders in the MAIN window's Settings) --------------- */
@@ -473,6 +579,20 @@ html.overlay-window #root {
   color: #9aa7c0;
 }
 
+/* Start-a-new-thread button, beside the camera toggle. */
+.ov-newchat {
+  background: transparent;
+  border: none;
+  color: #9aa7c0;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+}
+.ov-newchat:hover {
+  color: #e6c060;
+}
+
 /* --- 📷 screen-awareness checkbox in the pill ---------------------------- */
 .ov-cam {
   display: inline-flex;
@@ -501,6 +621,107 @@ html.overlay-window #root {
   background: rgba(13, 20, 36, 0.6);
 }
 .ov-cam.on .ov-cam-box {
+  border-color: rgba(230, 192, 96, 0.6);
+}
+
+/* --- Guide checklist: right rail, under the game's quest list ------------ */
+.ov-check {
+  position: absolute;
+  top: 42%;
+  right: 18px;
+  width: 260px;
+  background: rgba(13, 20, 36, 0.8);
+  border: 1px solid #2a3552;
+  border-radius: 10px;
+  padding: 7px 9px;
+  backdrop-filter: blur(6px);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
+}
+.ov-check.arrange {
+  border-color: rgba(230, 192, 96, 0.45);
+}
+.ov-check-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+.ov-check.arrange .ov-check-head {
+  cursor: grab;
+}
+.ov-check-title {
+  color: #e6c060;
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ov-check-count {
+  margin-left: auto;
+  color: #9aa7c0;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.ov-check-fold {
+  background: transparent;
+  border: none;
+  color: #9aa7c0;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 2px;
+}
+.ov-check-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 320px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #2a3552 transparent;
+}
+.ov-check-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 3px 5px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #c6cfdf;
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.35;
+  text-align: left;
+  cursor: pointer;
+}
+.ov-check-step:disabled {
+  cursor: default;
+}
+.ov-check-step.current {
+  background: rgba(230, 192, 96, 0.14);
+  color: #e8ecf6;
+}
+.ov-check-step.done .ov-check-text {
+  text-decoration: line-through;
+  opacity: 0.55;
+}
+.ov-check-step.busy {
+  opacity: 0.6;
+}
+.ov-check-box {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  margin-top: 1px;
+  border: 1px solid #2a3552;
+  border-radius: 3px;
+  font-size: 10px;
+  line-height: 12px;
+  text-align: center;
+  color: #e6c060;
+}
+.ov-check-step.current .ov-check-box {
   border-color: rgba(230, 192, 96, 0.6);
 }
 
