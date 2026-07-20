@@ -1,8 +1,9 @@
 # Aether Intelligence
 
 A desktop AI assistant for Final Fantasy XIV — chat about mechanics, gear, prices,
-lore, and events. Answers come first from **your own installed game client's data
-files**, then from the wikis and community APIs, every source cited. Multi-provider
+lore, and events, in the app or **on an overlay drawn over the running game**.
+Answers come first from **your own installed game client's data files**, then from
+the wikis and community APIs, every source cited. Multi-provider
 (Claude, GPT, Gemini, Grok): bring your own API key, or run Claude on your Pro/Max
 subscription at no per-token cost.
 > ⚠ The Claude subscription path conflicts with Anthropic's usage policy for
@@ -38,6 +39,9 @@ prompt caching, so the real bill is usually a bit lower.
 
 ## What it does
 
+- **Plays alongside the game** — a transparent, click-through overlay you summon
+  with a hotkey: ask a question without alt-tabbing, search the database, and
+  keep spawn timers on screen. See [In-game overlay](#in-game-overlay).
 - **Chat that researches** — the agent looks things up instead of answering from
   memory: your game client's data for items/NPCs/nodes, the wiki (including its
   data tables) for mechanics and drops, Universalis for market prices, the
@@ -87,18 +91,73 @@ prompt caching, so the real bill is usually a bit lower.
   the data folder (tool, arguments, duration, outcome), so a slow or strange
   answer can be traced turn by turn.
 
+## In-game overlay
+
+A second, transparent, always-on-top window drawn over FFXIV (run the game in
+**Borderless Windowed** — true fullscreen hides any overlay). It is
+**click-through by default**: it never eats a click meant for the game, and only
+takes the mouse and keyboard while a surface you summoned is open. Design notes
+and the build plan live in [docs/overlay-spec.md](docs/overlay-spec.md).
+
+| Shortcut | Does |
+|---|---|
+| `` Alt+` `` | **Ask pill** — ask the agent mid-game; the answer arrives on a compact card |
+| `Alt+D` | **Database drawer** — search everything, keyboard-first (↑↓, Enter, Esc) |
+| `` Alt+Shift+` `` | Show the overlay layer (chips only, no input captured) |
+| `Alt+\` | Kill switch — hide or restore the whole overlay |
+
+All four are re-bindable in **Settings → Background & overlay**, which also holds
+the overlay size and the list of everything you're watching.
+
+- **Ask pill** — answers stream onto a small card with its sources, an
+  **Open map** button when the answer is a place, and **Arm chips** to keep those
+  pins on screen. Follow-up questions share one rolling chat (it appears in the
+  app's sidebar under *Overlay*), and recent turns show under the pill.
+- **Let it see your screen** *(opt-in, off by default)* — tick 📷 in the pill and
+  each question carries one downscaled frame of the game, so "where are the aether
+  currents in **this** map" resolves against what you're actually looking at. The
+  frame is sent with that one question and never stored; the overlay excludes
+  itself from capture, so it only ever sees the game.
+- **Database drawer** — type to search, ↑↓ to walk results, Enter for a compact
+  detail. From there: **Flag on map**, **Open in app**, or **⏱ Watch** to arm a
+  chip (gathering nodes get their spawn windows attached automatically).
+- **Chips** — armed watches on a draggable rail: node timers count down to the
+  next window ("opens 20:42"), and a pin set from an answer stays as one chip.
+  Click a chip to raise the app on that spot; ✕ removes it. Arm them from an
+  answer card, a map pin's **⏱ Watch**, a node's page, or the drawer.
+- **Keep running in the background** *(Settings)* — closing the app hides it to
+  the system tray so the overlay keeps working; reopen from the tray icon. With
+  it off, closing the app closes the overlay too.
+- Every widget drags to wherever you want it, at any overlay size, and stays
+  there.
+
+> **On third-party tools:** Square Enix's ToS nominally prohibits them, and in
+> practice tolerates overlays that don't automate gameplay or read process
+> memory. This one draws on top and is fed only by data the app already has —
+> plus that optional screenshot, which is pixels you can already see. It never
+> reads game memory, never captures packets, and never sends input to the game.
+> Personal use, at your own risk.
+
 ## Architecture
 
 ```
 app/        Tauri v2 desktop shell (Rust) + React/TS frontend — three-pane UI
+  src/overlay/    the in-game overlay: Ask pill, database drawer, chips
+  src-tauri/      overlay.rs (transparent window, capture, screen grab,
+                  global hotkeys) + the embedded browser pane
 backend/    Python FastAPI sidecar: LLM providers, data sources (incl. the
-            sqpack/EXD game-client reader), map engine, image annotation,
-            per-chat storage
+            sqpack/EXD game-client reader), map engine, overlay watches,
+            image annotation, per-chat storage
+docs/       specs — overlay-spec.md, profile-workspaces-spec.md
 scripts/    build-installer.ps1 / .sh, mirror-to-drive.ps1, start-dev.ps1
 tools/      developer tools: derive_schema.py (regenerates exd_schema.json
-            against a new patch), sqpack_poc.py, portrait-sidecar/ (shelved
-            3D-render experiment — wiki portraits won)
+            against a new patch), eval_facts.py (hallucination regression
+            suite), sqpack_poc.py, portrait-sidecar/ (shelved 3D-render
+            experiment — wiki portraits won)
 ```
+
+The overlay renders the same frontend bundle as the app (`?overlay=1`) in a
+second window, and talks to the same backend.
 
 The backend runs as a local server on `127.0.0.1:8756`; the frontend talks to it
 over HTTP. API keys live in the OS keychain, never on disk.
@@ -109,7 +168,8 @@ profiles, chats, pins, preferences, caches, the local game-data index
 license attribution (`supplemental/`), and agent logs (`logs/`). In dev the
 repo root is the data dir —
 those folders (`profile/`, `chats/`, `knowledge/`, `cache/`, `map_pins.json`,
-`app_settings.json`) are gitignored, so personal data never lands in a commit.
+`overlay_watches.json`, `app_settings.json`) are gitignored, so personal data
+never lands in a commit.
 
 ## Data sources
 
@@ -121,6 +181,10 @@ those folders (`profile/`, `chats/`, `knowledge/`, `cache/`, `map_pins.json`,
 | [Universalis](https://universalis.app/) | market-board prices | live, never cached |
 | [FFXIV Console Games Wiki](https://ffxiv.consolegameswiki.com/) | mechanics, fights, quests, drops, lore | MediaWiki API via `curl_cffi` browser impersonation at low volume |
 | [The Lodestone](https://na.finalfantasyxiv.com/lodestone/) | news, patch notes, character import | official |
+
+Citations name **whatever actually answered** — a fact read from your own game
+files is cited as the FFXIV game client, not as the community database that would
+have been the fallback.
 
 Most of these are volunteer projects — the app's Sources tab links each project's
 own support page next to its citations. Please support them! 
