@@ -78,10 +78,12 @@ def _build_server(ctx: dict, out_q: "asyncio.Queue"):
         await _emit_result(out_q, "search_wiki", res)
         return {"content": [{"type": "text", "text": res}]}
 
-    @tool("lookup_item", "Look up an item in Garland Tools (this app's item database) "
+    @tool("lookup_item", "Look up an item in this app's item database (the player's "
+          "installed game client first, community data as fallback — cite the "
+          "result's `source`) "
           "— item level, the jobs that can equip it, stats, materia slots, icon, and "
           "its upgrades_to/downgrades_from progression chain (what replaces it). "
-          "Prefer over a wiki for item facts. If Garland has no record the wiki is "
+          "Prefer over a wiki for item facts. If the database has no record the wiki is "
           "searched AUTOMATICALLY and the result says which source answered — one "
           "call covers both; re-verify only when check_patch_notes says the current "
           "patch touched the topic.", {"name": str})
@@ -149,7 +151,7 @@ def _build_server(ctx: dict, out_q: "asyncio.Queue"):
         await _emit_result(out_q, "record_gear", res)
         return {"content": [{"type": "text", "text": res}]}
 
-    @tool("db_links", "Garland Tools database urls for a BATCH of names — items/gear, "
+    @tool("db_links", "This app's database urls for a BATCH of names — items/gear, "
           "dungeons+trials (kind 'instance'), NPCs, quests, achievements, mobs, "
           "FATEs, nodes. Use when you name in-game content so each name links to the "
           "app's Database tab. Pass EVERY name in ONE call, never one per row. "

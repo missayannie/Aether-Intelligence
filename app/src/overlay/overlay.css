@@ -2,9 +2,13 @@
    panels, gold accents, quest-list typography. The page itself must stay
    fully transparent so the game shows through everywhere we don't draw. */
 
-html,
-body,
-#root {
+/* Scoped to the overlay window (main.tsx tags <html> with .overlay-window):
+   this bundle is shared with the main window, and an unscoped !important here
+   would strip the main window's background too — the webview's white default
+   then bleeds through every transparent element (e.g. the resize gutters). */
+html.overlay-window,
+html.overlay-window body,
+html.overlay-window #root {
   background: transparent !important;
   margin: 0;
   overflow: hidden;
@@ -20,11 +24,20 @@ body,
      (set_ignore_cursor_events), not CSS-level. */
 }
 
-/* --- Ask pill: top-left dead zone, above the chat log ------------------- */
-.ov-pill {
+/* --- Ask group (pill + its answer card): top-left dead zone -------------- */
+/* The group is the draggable/positioned unit so the card always travels with
+   the pill. Default spot matches the old fixed position; useDraggable
+   overrides left/top inline from the saved layout. */
+.ov-ask {
   position: absolute;
   top: 96px;
   left: 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+.ov-pill {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -45,6 +58,15 @@ body,
   font-size: 13px;
   line-height: 1;
 }
+/* Drag handles only advertise themselves while capture is on — in ambient
+   state the window is click-through and no cursor ever reaches them. */
+.ov-pill.open .ov-mark {
+  cursor: grab;
+}
+.ov-chip.arrange {
+  cursor: grab;
+  border-color: rgba(230, 192, 96, 0.45);
+}
 .ov-input {
   background: transparent;
   border: none;
@@ -58,11 +80,265 @@ body,
   color: #9aa7c0;
 }
 
+/* --- Database drawer (Alt+D, concept 4): summoned, keyboard-first -------- */
+.ov-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  /* Invisible but hit-testable — the click-away surface behind the drawer. */
+  background: transparent;
+}
+.ov-drawer-grab {
+  cursor: grab;
+}
+.ov-drawer {
+  position: absolute;
+  top: 18%;
+  /* No transform-centering: the drag hook positions via left/top, and
+     offsetLeft must equal the visual position for the grab not to jump. */
+  left: calc(50% - 240px);
+  width: 480px;
+  max-width: 90vw;
+  background: rgba(13, 20, 36, 0.92);
+  border: 1px solid rgba(230, 192, 96, 0.4);
+  border-radius: 12px;
+  padding: 10px 12px;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ov-drawer-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ov-drawer-q {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #e8ecf6;
+  font-size: 14.5px;
+  font-family: inherit;
+}
+.ov-drawer-q::placeholder {
+  color: #9aa7c0;
+}
+.ov-drawer-list {
+  max-height: 320px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  scrollbar-width: thin;
+  scrollbar-color: #2a3552 transparent;
+}
+.ov-drawer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #e8ecf6;
+  font: inherit;
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.ov-drawer-row.sel {
+  background: rgba(230, 192, 96, 0.14);
+}
+.ov-drawer-ico {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  object-fit: contain;
+}
+.ov-drawer-glyph {
+  text-align: center;
+  color: #9aa7c0;
+}
+.ov-drawer-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ov-drawer-sub {
+  margin-left: auto;
+  flex: none;
+  color: #9aa7c0;
+  font-size: 12px;
+}
+.ov-drawer-empty {
+  color: #9aa7c0;
+  font-size: 13px;
+  padding: 8px;
+}
+.ov-drawer-hint {
+  color: #9aa7c0;
+  font-size: 11.5px;
+  margin-left: auto;
+}
+.ov-drawer-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ov-drawer-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: #e6c060;
+}
+.ov-drawer-desc {
+  font-size: 13px;
+  line-height: 1.45;
+  color: #c6cfdf;
+}
+.ov-drawer-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12.5px;
+  color: #c6cfdf;
+}
+.ov-drawer-fields b {
+  color: #9aa7c0;
+  font-weight: 600;
+  margin-right: 4px;
+}
+.ov-drawer-loc {
+  font-size: 13px;
+  color: #e8ecf6;
+}
+
+/* --- History: previous turns under the pill (summoned only) -------------- */
+.ov-history {
+  width: 320px;
+  max-height: 180px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  background: rgba(13, 20, 36, 0.72);
+  border: 1px solid #2a3552;
+  border-radius: 10px;
+  backdrop-filter: blur(6px);
+  scrollbar-width: thin;
+  scrollbar-color: #2a3552 transparent;
+}
+.ov-hist-msg {
+  font-size: 12.5px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  max-width: 95%;
+}
+.ov-hist-msg.user {
+  align-self: flex-end;
+  color: #e6c060;
+  text-align: right;
+}
+.ov-hist-msg.assistant {
+  align-self: flex-start;
+  color: #c6cfdf;
+}
+
+/* --- "Watching on overlay" management list (renders in the MAIN window's
+       Settings — overlay.css is in the shared bundle, so these apply there) -- */
+.ovw-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0 14px;
+}
+.ovw-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  padding: 4px 8px;
+  border: 1px solid rgba(128, 140, 170, 0.25);
+  border-radius: 8px;
+}
+.ovw-kind {
+  flex: none;
+}
+.ovw-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ovw-zone {
+  opacity: 0.6;
+  font-size: 12px;
+  margin-left: auto;
+}
+.ovw-x {
+  flex: none;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  opacity: 0.7;
+  font-size: 12px;
+}
+.ovw-x:hover {
+  opacity: 1;
+  color: #e6a25a;
+}
+
+/* --- Overlay hotkey editor (renders in the MAIN window's Settings) ------- */
+.ovk-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 12px 0 4px;
+}
+.ovk-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ovk-label {
+  flex: 1;
+  font-size: 13px;
+}
+.ovk-field {
+  width: 170px;
+  text-align: center;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(128, 140, 170, 0.35);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.ovk-field:focus {
+  outline: none;
+  border-color: #e6c060;
+}
+.ovk-err {
+  color: #e6a25a;
+  font-size: 12px;
+}
+.ovk-reset {
+  align-self: flex-start;
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(128, 140, 170, 0.35);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
 /* --- Answer card: slides in under the pill, decays ---------------------- */
 .ov-card {
-  position: absolute;
-  top: 136px;
-  left: 14px;
   width: 320px;
   background: rgba(13, 20, 36, 0.85);
   border: 1px solid #2a3552;
@@ -88,12 +364,97 @@ body,
   font-size: 11.5px;
   color: #9aa7c0;
 }
+.ov-card-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #9aa7c0;
+  font-size: 13px;
+}
+.ov-spin {
+  width: 12px;
+  height: 12px;
+  border: 2px solid #2a3552;
+  border-top-color: #e6c060;
+  border-radius: 50%;
+  animation: ov-rot 0.9s linear infinite;
+}
+@keyframes ov-rot {
+  to { transform: rotate(360deg); }
+}
+.ov-card-err {
+  color: #e6a25a;
+  line-height: 1.45;
+}
+.ov-card-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+.ov-card-btn {
+  background: rgba(230, 192, 96, 0.14);
+  border: 1px solid rgba(230, 192, 96, 0.45);
+  color: #e6c060;
+  border-radius: 999px;
+  padding: 2px 12px;
+  font-size: 12.5px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.ov-card-btn:hover {
+  background: rgba(230, 192, 96, 0.24);
+}
+.ov-card-src {
+  font-size: 11.5px;
+  color: #9aa7c0;
+}
 
-/* --- Timer chip: right rail, under where the minimap sits --------------- */
-.ov-chip {
+/* --- 📷 screen-awareness checkbox in the pill ---------------------------- */
+.ov-cam {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  user-select: none;
+}
+.ov-cam-ico {
+  font-size: 13px;
+  line-height: 1;
+  filter: grayscale(1) opacity(0.5);
+}
+.ov-cam.on .ov-cam-ico {
+  filter: none;
+}
+.ov-cam-box {
+  width: 14px;
+  height: 14px;
+  border: 1px solid #2a3552;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 13px;
+  text-align: center;
+  color: #e6c060;
+  background: rgba(13, 20, 36, 0.6);
+}
+.ov-cam.on .ov-cam-box {
+  border-color: rgba(230, 192, 96, 0.6);
+}
+
+/* --- Chips rail: armed watches, right rail under the minimap ------------- */
+.ov-chips {
   position: absolute;
   top: 300px;
   right: 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+.ov-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   padding: 3px 12px;
   background: rgba(13, 20, 36, 0.78);
   border: 1px solid #2a3552;
@@ -102,4 +463,23 @@ body,
   color: #9aa7c0;
   font-variant-numeric: tabular-nums;
   backdrop-filter: blur(6px);
+}
+.ov-chip-label {
+  white-space: nowrap;
+}
+.ov-chip.arrange .ov-chip-label {
+  cursor: pointer;
+  color: #e8ecf6;
+}
+.ov-chip-x {
+  background: transparent;
+  border: none;
+  color: #9aa7c0;
+  font-size: 11px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+}
+.ov-chip-x:hover {
+  color: #e6a25a;
 }

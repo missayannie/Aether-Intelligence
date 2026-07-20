@@ -80,7 +80,10 @@ SUMMONED  ignore_cursor_events = false, window focused, keyboard owned
 ```
 
 - `` Alt+` `` / `Alt+D` (global shortcuts, `tauri-plugin-global-shortcut`) →
-  SUMMONED with the pill/drawer open.
+  SUMMONED with the pill/drawer open. `` Alt+Win+` `` shows the overlay layer
+  ambient (widgets only, no capture, no pill). All overlay hotkeys are
+  re-bindable in Settings → Background & overlay (recorded live, applied via
+  `set_overlay_hotkeys`, persisted in app settings).
 - `Esc`, click-away, or action completion → back to AMBIENT and (on Windows)
   re-focus the game window (`SetForegroundWindow` on the previously-focused
   hwnd, captured at summon time).
@@ -164,8 +167,17 @@ conversation lives in the overlay chat (visible in the app's sidebar under an
 
 ### 5.3 Overlay layout persistence
 
-`DATA_DIR/overlay_layout.json`: per-monitor widget positions, enabled widgets,
-hotkey overrides, quiet hours. Written by the overlay, readable in app settings.
+**Shipped early (phase 0):** widgets are draggable while the pill is open
+(capture on) — the pill+card group by its ✦ mark, chips anywhere. Positions
+persist in the overlay window's localStorage (`ov-layout-v1`) as **fractions
+of the free space** (`left / (viewport − widget)`), so a widget parked at an
+edge stays at that edge on any monitor resolution; placement recomputes on
+window resize.
+
+Still planned: promoting the layout to `DATA_DIR/overlay_layout.json`
+(per-monitor profiles, enabled widgets, hotkey overrides, quiet hours) once
+app settings need to read it — localStorage doesn't carry between dev
+(localhost) and packaged (tauri://) origins.
 
 ## 6. Concept-level behavior notes
 
@@ -195,6 +207,43 @@ hotkey overrides, quiet hours. Written by the overlay, readable in app settings.
   (window passed, notify fired) fade out.
 - Toasts: watch fired, market threshold crossed, patch detected (the backend
   already watches the client version). Max 1 toast on screen; 8s decay.
+
+#### Arming chips from MAP PINS (user request, 2026-07-19)
+A watch can be positional, not just timed — "keep these spots in front of me."
+- **Watch kinds:** `pin` (one spot) and `pinset` (a category of pins from one
+  agent answer — "Aether Currents — Coerthas W. (9)" is ONE chip, never nine).
+  Node pins that carry spawn data additionally get countdown text (the timed
+  path); plain pins are static reminders.
+- **Chip behavior:** ambient, click-through. While capture is on (pill open),
+  each chip shows ✕ to dismiss and is clickable → `overlay_open_map` raises
+  the app on that zone with the pins restored.
+- **Arm points, in order of reach:**
+  1. **The Ask card** — whenever a turn produced pins, the card grows an
+     `Arm chips (N)` button beside `Open map`. The button IS the "agent asks
+     if you'd like to arm" moment: zero extra model round-trips.
+  2. **Map tab** (app): the pin editor and the 📌 Keep flow get an
+     "⏱ Watch on overlay" action; the layer toggles row gets one for a whole
+     custom category.
+  3. **GarlandDB detail** (app): gathering nodes/fish get "Watch" — these arm
+     as TIMED watches with the spawn window attached.
+- **Storage:** `DATA_DIR/overlay_watches.json` via `/overlay/watches` CRUD —
+  shared by app and overlay, so arming in one shows in the other instantly
+  (overlay polls, app reads on Map tab focus).
+
+### 6.5 Screen awareness (pulled forward from the shelf, 2026-07-19)
+"Where are the aether currents in **this map**?" — the pill can see the game.
+- On each ask (📷 toggle in the pill, default ON, persisted), the Rust side
+  grabs the primary monitor, downscales to ~1600px, JPEG-encodes, and sends it
+  with the turn as a one-shot vision block — never stored, never re-billed on
+  later turns (unlike chat attachments).
+- The overlay window sets `WDA_EXCLUDEFROMCAPTURE`, so its own pill/chips
+  never contaminate the screenshot.
+- The overlay system prompt tells the model: read WHERE the player is from the
+  shot (minimap zone text, open windows) and resolve "this map / here" against
+  it; answers that are places still go through pin_on_map → "pinned in the
+  app" + the Open map button.
+- ToS posture unchanged: this reads pixels the player already sees — the
+  tolerated end (§8's screenshot row now in scope; memory reading still out).
 
 ### 6.4 Checklist (Concept 2)
 - Shows the active doc's checkbox steps, current step highlighted (first
@@ -278,18 +327,24 @@ where work lands, matching current repo layout.
 
 **Goal:** "where do I find Cordia Sap?" answered in-game, card → map/watch.
 
-- [ ] Backend: `POST /overlay/ask` (new `backend/overlay.py` router) — run the
-      existing agent pipeline into an `overlay-` chat, distill to card JSON
-      (§5.1), SSE stream (`status`, `card`, `error` events). Respect the
-      anti-flail rule; cap turns lower than the app (play-time answers).
-- [ ] Backend: overlay chats appear in `/chats` under an "Overlay" group flag.
-- [ ] Frontend: `AskPill.tsx` + `AnswerCard.tsx` + summon wiring (`` Alt+` ``),
-      auto-dismiss, hover-to-hold.
-- [ ] `Open map` action: Tauri command to raise/focus the main window + emit an
-      event the main window handles (switch to Map tab, `jumpToPin`).
+- [x] Backend: implemented as `surface: "overlay"` on the existing `/chat`
+      (simpler than a separate route — resolves Q3 with the zero-cost option):
+      an OVERLAY_SYSTEM compact-card block is appended, the chat is stamped
+      `surface`, and the CARD is assembled client-side from the normal event
+      stream (tokens → text, `map` → place, `source` → citation).
+- [x] Backend: overlay chats carry `surface: "overlay"` in `/chats` (sidebar
+      grouping UI still to come).
+- [x] Frontend: `overlay/agent.ts` (model resolution, ONE rolling overlay chat
+      reused across asks, card assembly) + pill wiring in `Overlay.tsx` —
+      pill stays open for follow-ups, card streams below, 20s decay with
+      hover-to-hold, markdown stripped for card text.
+- [x] `Open map` action: `overlay_open_map` Tauri command raises the main
+      window and forwards the map payload; App.tsx listens and opens the zone
+      with the temp pin. (Cross-window handoff still needs an in-game pass.)
 - [ ] `Ping me` action: `POST /overlay/watches` from the card payload (chip UI
       itself lands in phase 3; until then it just confirms "armed").
 - [ ] Settings: overlay enable toggle + monitor picker in the main app.
+- [ ] Sidebar "Overlay" group rendering in the main app.
 - **Milestone:** end-to-end over the game; flight-recorder trace attached for
   latency; decide Q3 (distillation approach) from real numbers.
 
@@ -311,12 +366,18 @@ where work lands, matching current repo layout.
 
 **Goal:** ambient timers that are right and quiet.
 
-- [ ] Backend: `GET /overlay/timers` — ET math + window computation from
-      `gameclient` node data; unit-check against known unspoiled nodes.
-- [ ] Watches CRUD + persistence (`overlay_watches.json`); arm points in the
-      app (GarlandDB detail) and from Ask cards / drawer (already wired).
-- [ ] `Chips.tsx`: countdown chips, active-window state, fade-on-stale; toast
-      stack (watch fired, patch detected — reuse the existing version watcher).
+- [x] Backend: `GET /overlay/timers` — ET math (1 ET hour = 175s real) from
+      the node's pop-time table; verified against Cordia Sap's node (12:00 ET
+      × 120 ET min → 5.83 real min window, opens within one ET day).
+- [x] Watches CRUD + persistence (`overlay_watches.json`); node watches arrive
+      as just `{kind:"node", ref}` — the backend enriches label/zone/coords/
+      windows from the local client. Arm points: Ask card `Arm chips (N)`,
+      GarlandDB node detail "Watch on overlay", Map pin editor "⏱ Watch".
+- [x] Chips: countdown ("opens 20:42" ticking each second, 20s backend poll),
+      pinset chips (one chip per answer, click → open in app), ✕ remove while
+      the pill is open, draggable rail.
+- [ ] Toast stack (watch fired, patch detected) + fade-on-stale for expired
+      windows.
 - [ ] Stretch: market threshold watches via Universalis slow poll.
 - **Milestone:** arm two node watches, observe a full window cycle (chip counts
   down → "open now" → toast → fades) against in-game truth.
@@ -330,7 +391,9 @@ where work lands, matching current repo layout.
       writing through existing doc storage.
 - [ ] `Checklist.tsx`: quest-list-styled steps, current-step highlight,
       Alt-held hit-testing (§6.4), poll for agent-side doc edits.
-- [ ] Arrange mode for all widgets (drag + persist `overlay_layout.json`).
+- [ ] Arrange mode for all widgets — basic drag + fraction persistence shipped
+      in phase 0 (§5.3); remaining: promote to `overlay_layout.json`, arrange
+      without summoning the pill.
 - **Milestone:** tick steps in-game while the same doc visibly updates in the
   app, and vice versa (agent reorders plan → widget updates).
 

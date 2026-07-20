@@ -102,6 +102,9 @@ export default function GameMap({ map, onClose, onTextureError, onSaveShot,
   const [editing, setEditing] = useState<CustomPin | null>(null);
   const [editLabel, setEditLabel] = useState("");
   const [editColor, setEditColor] = useState(PIN_COLORS[0]);
+  // "⏱ Watch" feedback — this pin now lives on the in-game overlay as a chip.
+  const [pinWatched, setPinWatched] = useState(false);
+  useEffect(() => { setPinWatched(false); }, [editing]);
   // Icon urls that 404'd — those markers fall back to a dot instead of the
   // webview's broken-image glyph.
   const [brokenIcons, setBrokenIcons] = useState<Set<string>>(new Set());
@@ -853,6 +856,20 @@ export default function GameMap({ map, onClose, onTextureError, onSaveShot,
                             onClick={() => setEditColor(c)} />
                   ))}
                   <span className="gm-form-spacer" />
+                  <button className="gm-form-btn"
+                          disabled={pinWatched}
+                          title="Show this pin as a chip on the in-game overlay"
+                          onClick={() => {
+                            if (!editing) return;
+                            const label = editLabel || "Map pin";
+                            void api.overlayWatchAdd({
+                              kind: "pin", label, zone: map.zone,
+                              place: { zone: map.zone,
+                                       pin: { x: editing.x, y: editing.y, label, space: "map" } },
+                            }).then(() => setPinWatched(true)).catch(() => {});
+                          }}>
+                    {pinWatched ? "⏱ ✓" : "⏱ Watch"}
+                  </button>
                   <button className="gm-form-btn" onClick={saveEdit}>Save</button>
                   <button className="gm-form-btn danger"
                           onClick={() => editing && removePin(editing)}>Delete</button>

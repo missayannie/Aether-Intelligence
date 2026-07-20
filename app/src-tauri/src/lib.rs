@@ -12,6 +12,116 @@ mod overlay;
 // Holds the backend child process so we can kill it on exit.
 struct BackendProcess(Mutex<Option<CommandChild>>);
 
+// "Keep running in the background": closing the main window hides it to the
+// system tray (overlay + backend keep working) instead of quitting. Pushed
+// from the frontend's Settings on startup and on change.
+struct CloseToTray(std::sync::atomic::AtomicBool);
+
+fn kill_backend(app: &AppHandle) {
+    if let Some(state) = app.try_state::<BackendProcess>() {
+        if let Some(child) = state.0.lock().unwrap().take() {
+            let _ = child.kill();
+        }
+    }
+}
+
+fn show_main(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.unminimize();
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+}
+
+#[tauri::command]
+fn set_close_to_tray(app: AppHandle, enabled: bool) {
+    if let Some(s) = app.try_state::<CloseToTray>() {
+        s.0.store(enabled, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Overlay hotkeys — editable in Settings. The plugin handler compares against
+// THIS state, so re-binding is just: unregister, register, swap the state.
+const HK_ASK_DEFAULT: &str = "Alt+Backquote";
+// Alt+Shift+`, NOT Alt+Win+`: Windows reserves several Win+Alt combos (Game
+// Bar, HDR) and a swallowed ambient hotkey looked like the pill misfiring.
+const HK_AMBIENT_DEFAULT: &str = "Alt+Shift+Backquote";
+const HK_KILL_DEFAULT: &str = "Alt+Backslash";
+const HK_DRAWER_DEFAULT: &str = "Alt+D";
+
+struct OverlayHotkeys(Mutex<HotkeySet>);
+
+struct HotkeySet {
+    ask: tauri_plugin_global_shortcut::Shortcut,
+    ambient: tauri_plugin_global_shortcut::Shortcut,
+    kill: tauri_plugin_global_shortcut::Shortcut,
+    drawer: tauri_plugin_global_shortcut::Shortcut,
+}
+
+impl HotkeySet {
+    fn defaults() -> Self {
+        Self {
+            ask: HK_ASK_DEFAULT.parse().expect("default ask hotkey parses"),
+            ambient: HK_AMBIENT_DEFAULT.parse().expect("default ambient hotkey parses"),
+            kill: HK_KILL_DEFAULT.parse().expect("default kill hotkey parses"),
+            drawer: HK_DRAWER_DEFAULT.parse().expect("default drawer hotkey parses"),
+        }
+    }
+}
+
+/// Re-bind the three overlay shortcuts. Rejects unparseable or duplicate
+/// combos with a human-readable error the Settings UI shows verbatim; on any
+/// failure the previous bindings stay registered.
+#[tauri::command]
+fn set_overlay_hotkeys(
+    app: AppHandle,
+    ask: String,
+    ambient: String,
+    kill: String,
+    drawer: String,
+) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
+    let a: Shortcut = ask.parse().map_err(|_| format!("Can't parse \"{ask}\""))?;
+    let b: Shortcut = ambient.parse().map_err(|_| format!("Can't parse \"{ambient}\""))?;
+    let k: Shortcut = kill.parse().map_err(|_| format!("Can't parse \"{kill}\""))?;
+    let d: Shortcut = drawer.parse().map_err(|_| format!("Can't parse \"{drawer}\""))?;
+    let all = [a, b, k, d];
+    for i in 0..all.len() {
+        for j in (i + 1)..all.len() {
+            if all[i] == all[j] {
+                return Err("Each shortcut must be different.".into());
+            }
+        }
+    }
+    let gs = app.global_shortcut();
+    let _ = gs.unregister_all();
+    let register_all = || -> Result<(), String> {
+        gs.register(a).map_err(|e| format!("\"{ask}\": {e}"))?;
+        gs.register(b).map_err(|e| format!("\"{ambient}\": {e}"))?;
+        gs.register(k).map_err(|e| format!("\"{kill}\": {e}"))?;
+        gs.register(d).map_err(|e| format!("\"{drawer}\": {e}"))?;
+        Ok(())
+    };
+    if let Err(e) = register_all() {
+        // Roll back to whatever was bound before, so the overlay never ends
+        // up hotkey-less because one combo was taken by another app.
+        let _ = gs.unregister_all();
+        if let Some(hk) = app.try_state::<OverlayHotkeys>() {
+            let set = hk.0.lock().unwrap();
+            let _ = gs.register(set.ask);
+            let _ = gs.register(set.ambient);
+            let _ = gs.register(set.kill);
+            let _ = gs.register(set.drawer);
+        }
+        return Err(e);
+    }
+    if let Some(hk) = app.try_state::<OverlayHotkeys>() {
+        *hk.0.lock().unwrap() = HotkeySet { ask: a, ambient: b, kill: k, drawer: d };
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Embedded browser pane.
 //
@@ -271,21 +381,30 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         // Overlay hotkeys (docs/overlay-spec.md §4.2). Global — they work while
-        // the game has focus; that's the whole point. Alt+` summons the Ask
-        // pill, Alt+\ is the kill switch.
+        // the game has focus; that's the whole point. Defaults: Alt+` summons
+        // the Ask pill, Alt+Win+` shows the overlay layer without the pill,
+        // Alt+\ is the kill switch — all re-bindable in Settings
+        // (set_overlay_hotkeys); the handler reads the CURRENT bindings.
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_shortcuts(["Alt+Backquote", "Alt+Backslash"])
-                .expect("overlay shortcuts parse")
                 .with_handler(|app, shortcut, event| {
-                    use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
+                    use tauri_plugin_global_shortcut::ShortcutState;
                     if event.state() != ShortcutState::Pressed {
                         return;
                     }
-                    if shortcut == &Shortcut::new(Some(Modifiers::ALT), Code::Backquote) {
+                    let Some(hk) = app.try_state::<OverlayHotkeys>() else { return };
+                    let (ask, ambient, kill, drawer) = {
+                        let set = hk.0.lock().unwrap();
+                        (set.ask, set.ambient, set.kill, set.drawer)
+                    };
+                    if shortcut == &ask {
                         overlay::summon_ask(app);
-                    } else if shortcut == &Shortcut::new(Some(Modifiers::ALT), Code::Backslash) {
+                    } else if shortcut == &ambient {
+                        overlay::show_ambient(app);
+                    } else if shortcut == &kill {
                         overlay::toggle(app);
+                    } else if shortcut == &drawer {
+                        overlay::summon_drawer(app);
                     }
                 })
                 .build(),
@@ -296,9 +415,17 @@ pub fn run() {
             browser_navigate,
             browser_history,
             browser_url,
-            overlay::overlay_set_capture
+            overlay::overlay_set_capture,
+            overlay::overlay_open_map,
+            overlay::overlay_capture_screen,
+            overlay::overlay_click_at,
+            overlay::overlay_open_db,
+            set_close_to_tray,
+            set_overlay_hotkeys
         ])
         .manage(BackendProcess(Mutex::new(None)))
+        .manage(CloseToTray(std::sync::atomic::AtomicBool::new(false)))
+        .manage(OverlayHotkeys(Mutex::new(HotkeySet::defaults())))
         .setup(|app| {
             // Launch the bundled backend sidecar (binaries/backend-<triple>).
             // Pass our PID so the backend can exit if we die unexpectedly.
@@ -336,15 +463,79 @@ pub fn run() {
                     });
                 }
             }
+
+            // Register the default overlay hotkeys. The frontend re-binds from
+            // saved Settings moments later (set_overlay_hotkeys); a combo
+            // already taken by another app just logs — the app must not crash
+            // over a shortcut.
+            {
+                use tauri_plugin_global_shortcut::GlobalShortcutExt;
+                let set = HotkeySet::defaults();
+                for sc in [set.ask, set.ambient, set.kill, set.drawer] {
+                    if let Err(e) = app.global_shortcut().register(sc) {
+                        eprintln!("[overlay] hotkey register failed: {e}");
+                    }
+                }
+            }
+
+            // System tray: always present, so the app is reachable while the
+            // main window is hidden (the "keep running in background" setting)
+            // and killable if anything ever wedges.
+            {
+                use tauri::menu::{Menu, MenuItem};
+                use tauri::tray::TrayIconBuilder;
+                let open_i =
+                    MenuItem::with_id(app, "open", "Open Aether Intelligence", true, None::<&str>)?;
+                let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+                let menu = Menu::with_items(app, &[&open_i, &quit_i])?;
+                let mut tray = TrayIconBuilder::new()
+                    .menu(&menu)
+                    .show_menu_on_left_click(true)
+                    .tooltip("Aether Intelligence")
+                    .on_menu_event(|app, event| match event.id.as_ref() {
+                        "open" => show_main(app),
+                        "quit" => {
+                            kill_backend(app);
+                            app.exit(0);
+                        }
+                        _ => {}
+                    });
+                if let Some(icon) = app.default_window_icon() {
+                    tray = tray.icon(icon.clone());
+                }
+                tray.build(app)?;
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::Destroyed = event {
-                if let Some(state) = window.app_handle().try_state::<BackendProcess>() {
-                    if let Some(child) = state.0.lock().unwrap().take() {
-                        let _ = child.kill();
+            let app = window.app_handle();
+            match event {
+                // Main window close: hide to tray when the setting is on
+                // (overlay + backend keep working), otherwise let it close.
+                tauri::WindowEvent::CloseRequested { api, .. }
+                    if window.label() == "main" =>
+                {
+                    let to_tray = app
+                        .try_state::<CloseToTray>()
+                        .map(|s| s.0.load(std::sync::atomic::Ordering::Relaxed))
+                        .unwrap_or(false);
+                    if to_tray {
+                        api.prevent_close();
+                        let _ = window.hide();
                     }
                 }
+                // Main window actually gone: take the whole app down CLEANLY —
+                // backend, overlay window, process. (Previously the overlay
+                // kept an orphaned, backend-less process alive with no way to
+                // reopen the app.)
+                tauri::WindowEvent::Destroyed if window.label() == "main" => {
+                    kill_backend(app);
+                    if let Some(ov) = app.get_webview_window(overlay::OVERLAY_LABEL) {
+                        let _ = ov.close();
+                    }
+                    app.exit(0);
+                }
+                _ => {}
             }
         })
         .run(tauri::generate_context!())

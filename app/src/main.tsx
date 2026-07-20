@@ -17,6 +17,10 @@ function isOverlayWindow(): boolean {
   }
 }
 
+// overlay.css ships in this shared bundle, so its window-transparency rules
+// must only bite in the overlay window — flag it on <html> for CSS to scope by.
+if (isOverlayWindow()) document.documentElement.classList.add("overlay-window");
+
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     {isOverlayWindow() ? <Overlay /> : <App />}

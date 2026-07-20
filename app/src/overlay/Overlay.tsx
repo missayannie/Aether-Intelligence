@@ -3,10 +3,30 @@
 // rail, and a capture round-trip — Alt+` expands the pill into an input
 // (window takes keyboard), Esc/blur collapses it (game gets focus back).
 // Enter echoes the text as a decaying card; no agent call yet — that's phase 1.
-import { useCallback, useEffect, useRef, useState } from "react";
+//
+// While the pill is open (capture on), widgets are draggable: the pill+card
+// group by its ✦ mark, the chip anywhere. Positions persist as fractions of
+// the free space (left / (viewport − widget)), so a widget parked at an edge
+// stays at that edge on any monitor resolution.
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import {
+  armChips, ask as askAgent, fetchHistory, fetchWatches, plainText, removeWatch,
+  type Card, type CardPlace,
+} from "./agent";
+import { api, type OverlayTimer, type OverlayWatch } from "../api";
+import Drawer from "./Drawer";
 import "./overlay.css";
 
+/** "3:42" under an hour, "1h 12m" above — countdown text for a chip. */
+function fmtDelta(sec: number): string {
+  const s = Math.max(0, Math.round(sec));
+  const m = Math.floor(s / 60);
+  if (m >= 60) return `${Math.floor(m / 60)}h ${m % 60}m`;
+  return `${m}:${String(s % 60).padStart(2, "0")}`;
+}
+
 const IN_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+const LAYOUT_KEY = "ov-layout-v1";
 
 async function setCapture(capture: boolean) {
   if (!IN_TAURI) return; // plain-web dev preview: render only
@@ -18,13 +38,257 @@ async function setCapture(capture: boolean) {
   }
 }
 
-export default function Overlay() {
-  const [expanded, setExpanded] = useState(false);
-  const [card, setCard] = useState<string | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const cardTimer = useRef<number | undefined>(undefined);
+// Widget scale, set from the main app's Settings ("Overlay size"). Applied as
+// native webview zoom (like the app's text size) so everything scales and the
+// drag/placement math keeps working in CSS pixels. localStorage is the source
+// of truth; the overlay://scale broadcast is the live-update signal (storage
+// events aren't guaranteed to fire across Tauri windows).
+const SCALE_KEY = "overlayScale";
 
+function readScale(): number {
+  const v = parseFloat(localStorage.getItem(SCALE_KEY) ?? "1");
+  return isNaN(v) ? 1 : clamp(v, 0.7, 1.6);
+}
+
+async function applyScale() {
+  const s = readScale();
+  if (IN_TAURI) {
+    try {
+      const { getCurrentWebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+      await getCurrentWebviewWindow().setZoom(s);
+      relayout();
+      return;
+    } catch (e) {
+      // Native zoom needs a Tauri capability and can be refused — the CSS
+      // fallback below then does the scaling, which is why every widget's
+      // geometry has to be zoom-aware (see cssZoom).
+      console.error("overlay setZoom failed, using CSS zoom", e);
+    }
+  }
+  (document.documentElement.style as unknown as Record<string, string>).zoom = String(s);
+  relayout();
+}
+
+/** Scaling changes the usable area, so every placed widget must recompute.
+ * Fired after the zoom actually lands — it's applied asynchronously, and the
+ * first paint happens before it, which is what pushed edge-parked widgets
+ * off-screen. */
+function relayout() {
+  window.dispatchEvent(new Event("ov-relayout"));
+}
+
+type Frac = { fx: number; fy: number };
+
+function loadLayout(): Record<string, Frac> {
+  try {
+    return JSON.parse(localStorage.getItem(LAYOUT_KEY) ?? "{}");
+  } catch {
+    return {};
+  }
+}
+
+function saveFrac(id: string, f: Frac) {
+  const all = loadLayout();
+  all[id] = f;
+  localStorage.setItem(LAYOUT_KEY, JSON.stringify(all));
+}
+
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
+/** The CSS zoom actually applied to the document (1 when the native webview
+ * zoom did the work instead). Widget geometry — offsetLeft/Top, offsetWidth —
+ * is expressed in ZOOMED css pixels, while window.innerWidth stays in device
+ * pixels; mixing the two pushed widgets off-screen by exactly the zoom factor
+ * (a pill at fx≈1 rendered at x=4088 on a 3440-wide screen, invisible, while
+ * the overlay still held the mouse). Everything below divides by this. */
+function cssZoom(): number {
+  const z = parseFloat(
+    (document.documentElement.style as unknown as Record<string, string>).zoom || "1");
+  return !z || isNaN(z) ? 1 : z;
+}
+/** Usable area in the same units as offsetLeft/offsetWidth. */
+function viewport(): { w: number; h: number } {
+  const z = cssZoom();
+  return { w: window.innerWidth / z, h: window.innerHeight / z };
+}
+
+/** Drag-to-move with resolution-independent persistence. Placement is
+ * recomputed from the stored fraction on window resize, so the same saved
+ * layout lands proportionally on any monitor. Deliberately NOT recomputed on
+ * widget size change (pill expanding, card appearing) — that would make the
+ * widget creep; it just grows in place. */
+function useDraggable(id: string, def: Frac, enabled: boolean) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [frac, setFrac] = useState<Frac>(() => loadLayout()[id] ?? def);
+  const [px, setPx] = useState<{ x: number; y: number } | null>(null);
+
+  useEffect(() => {
+    const place = () => {
+      const el = ref.current;
+      if (!el) return;
+      const vp = viewport();
+      const maxX = Math.max(0, vp.w - el.offsetWidth);
+      const maxY = Math.max(0, vp.h - el.offsetHeight);
+      setPx({ x: Math.round(clamp(frac.fx * maxX, 0, maxX)),
+              y: Math.round(clamp(frac.fy * maxY, 0, maxY)) });
+    };
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("ov-relayout", place);
+    window.addEventListener("storage", place);
+    // Belt-and-braces: the zoom can land a frame or two after mount, and a
+    // widget must never be left parked outside the screen.
+    const t1 = window.setTimeout(place, 120);
+    const t2 = window.setTimeout(place, 600);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("ov-relayout", place);
+      window.removeEventListener("storage", place);
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+    };
+  }, [frac]);
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (!enabled) return;
+    const el = ref.current;
+    if (!el) return;
+    // preventDefault keeps focus where it is — dragging must not blur the
+    // input (blur collapses the pill mid-drag).
+    e.preventDefault();
+    // Deltas come from screenX/Y, which the webview's zoom ("Overlay size")
+    // never touches, divided by the zoom WE set — clientX math drifted
+    // down-right under zoom because rendered pixels and reported coordinates
+    // disagreed. offsetLeft/Top are layout truth for the start position.
+    // Screen deltas are DEVICE px; element geometry is zoomed-css px.
+    const zoom = cssZoom();
+    const startSX = e.screenX;
+    const startSY = e.screenY;
+    const start = { x: el.offsetLeft, y: el.offsetTop };
+    const vp = viewport();
+    const maxX = Math.max(0, vp.w - el.offsetWidth);
+    const maxY = Math.max(0, vp.h - el.offsetHeight);
+    let last = start;
+    const move = (ev: PointerEvent) => {
+      last = {
+        x: Math.round(clamp(start.x + (ev.screenX - startSX) / zoom, 0, maxX)),
+        y: Math.round(clamp(start.y + (ev.screenY - startSY) / zoom, 0, maxY)),
+      };
+      setPx(last);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      const f = {
+        fx: maxX > 0 ? clamp(last.x / maxX, 0, 1) : 0,
+        fy: maxY > 0 ? clamp(last.y / maxY, 0, 1) : 0,
+      };
+      setFrac(f);
+      saveFrac(id, f);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  const style = px
+    ? ({ left: px.x, top: px.y, right: "auto", bottom: "auto" } as React.CSSProperties)
+    : undefined;
+  return { ref, style, onPointerDown };
+}
+
+const SHOT_KEY = "ov-screenshot";
+
+/** A crash anywhere in the overlay tree must NEVER brick the screen: the
+ * window may hold cursor capture, and a dead React root would eat every
+ * click with nothing visible. Release capture, show a way out. */
+class OverlayBoundary extends React.Component<
+  { children: React.ReactNode }, { err: boolean }
+> {
+  state = { err: false };
+  static getDerivedStateFromError() {
+    return { err: true };
+  }
+  componentDidCatch(e: unknown) {
+    console.error("overlay crashed", e);
+    void setCapture(false);
+  }
+  render() {
+    if (!this.state.err) return this.props.children;
+    return (
+      <div className="ov-card ov-card-err" style={{ position: "absolute", top: 96, left: 14 }}>
+        The overlay hit an error. Your mouse is back in the game — press the
+        kill switch (Alt+\) to hide this, then resummon.
+      </div>
+    );
+  }
+}
+
+export default function OverlayRoot() {
+  return (
+    <OverlayBoundary>
+      <Overlay />
+    </OverlayBoundary>
+  );
+}
+
+function Overlay() {
+  const [expanded, setExpanded] = useState(false);
+  const [card, setCard] = useState<Card | null>(null);
+  const [hovered, setHovered] = useState(false);
+  const [armed, setArmed] = useState(false); // this card's pins are armed
+  const [watches, setWatches] = useState<OverlayWatch[]>([]);
+  // 📷 — include a screenshot of the game with each ask (screen awareness).
+  // Default OFF: sending the screen is opt-in, per ask session.
+  const [shot, setShot] = useState(() => localStorage.getItem(SHOT_KEY) === "1");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Default ≈ the top-left dead zone above the chat log.
+  const ask = useDraggable("ask", { fx: 0.005, fy: 0.07 }, expanded);
+  // The chips rail: one draggable group on the right rail under the minimap.
+  const chips = useDraggable("chips", { fx: 0.995, fy: 0.22 }, expanded);
+
+  // Refresh on mount, on every summon, AND on a slow poll — chips armed from
+  // the app (node pages, map pins) must appear on the overlay by themselves,
+  // without the player having to re-summon anything.
+  useEffect(() => {
+    void fetchWatches().then(setWatches);
+    const t = window.setInterval(() => void fetchWatches().then(setWatches), 30000);
+    return () => window.clearInterval(t);
+  }, [expanded]);
+
+  // Timed watches: poll the backend's window math every 20s, tick the
+  // countdown locally every second in between. Both idle when nothing is timed.
+  const [timers, setTimers] = useState<Record<string, OverlayTimer>>({});
+  const [, setTick] = useState(0);
+  const anyTimed = watches.some((w) => (w.kind === "node") || (w as { windows?: unknown[] }).windows?.length);
+  useEffect(() => {
+    if (!anyTimed) return;
+    const poll = async () => {
+      try {
+        const r = await api.overlayTimers();
+        setTimers(Object.fromEntries(r.timers.filter((t) => t.timed).map((t) => [t.id, t])));
+      } catch { /* backend briefly away — keep last values */ }
+    };
+    void poll();
+    const p = window.setInterval(poll, 20000);
+    const t = window.setInterval(() => setTick((n) => n + 1), 1000);
+    return () => { window.clearInterval(p); window.clearInterval(t); };
+  }, [anyTimed]);
+
+  const chipTime = (w: OverlayWatch): string => {
+    const t = timers[w.id];
+    if (!t?.timed || !t.opens_at || !t.closes_at) return "";
+    const now = Date.now() / 1000;
+    return t.active || now >= t.opens_at
+      ? ` · up now ${fmtDelta(t.closes_at - now)}`
+      : ` · opens ${fmtDelta(t.opens_at - now)}`;
+  };
+
+  // The two SUMMONED surfaces (pill, drawer) are mutually exclusive; both own
+  // the keyboard while open, and closing either hands input back to the game.
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const expand = useCallback(() => {
+    setDrawerOpen(false);
     setExpanded(true);
     void setCapture(true);
   }, []);
@@ -32,66 +296,398 @@ export default function Overlay() {
     setExpanded(false);
     void setCapture(false);
   }, []);
+  const openDrawer = useCallback(() => {
+    setExpanded(false);
+    setDrawerOpen(true);
+    void setCapture(true);
+  }, []);
+  const closeDrawer = useCallback(() => {
+    setDrawerOpen(false);
+    void setCapture(false);
+  }, []);
+  // The drawer: draggable by its ✦ mark while open; lands centered-ish.
+  const drawerDrag = useDraggable("drawer", { fx: 0.5, fy: 0.18 }, drawerOpen);
 
   useEffect(() => {
-    // The window only comes into being through Alt+`, so creation IS the
-    // first summon; later summons arrive as events from the Rust hotkey.
-    expand();
-    let unlisten: (() => void) | undefined;
+    // Auto-open the surface whose hotkey CREATED this window (?summon=1 /
+    // ?drawer=1). Alt+Win+` creates it ambient — widgets only, no capture.
+    const boot = new URLSearchParams(window.location.search);
+    if (boot.has("summon")) expand();
+    else if (boot.has("drawer")) openDrawer();
+    // Later summons arrive over TWO channels (see overlay.rs): the Tauri
+    // event, and a direct eval calling these globals — so a missed listener
+    // can never strand a hotkey.
+    const w = window as unknown as Record<string, unknown>;
+    w.__aetherOverlaySummon = expand;
+    w.__aetherOverlayDrawer = openDrawer;
+    const unlistens: (() => void)[] = [];
     if (IN_TAURI) {
-      import("@tauri-apps/api/event")
-        .then(({ listen }) => listen("overlay://summon-ask", () => expand()))
-        .then((u) => {
-          unlisten = u;
-        });
+      import("@tauri-apps/api/event").then(({ listen }) => {
+        void listen("overlay://summon-ask", () => expand()).then((u) => unlistens.push(u));
+        void listen("overlay://summon-drawer", () => openDrawer()).then((u) => unlistens.push(u));
+      });
     }
     return () => {
-      if (unlisten) unlisten();
+      delete w.__aetherOverlaySummon;
+      delete w.__aetherOverlayDrawer;
+      unlistens.forEach((u) => u());
     };
-  }, [expand]);
+  }, [expand, openDrawer]);
 
   useEffect(() => {
     if (expanded) inputRef.current?.focus();
   }, [expanded]);
 
+  // Whichever summoned surface is open owns the keyboard — its input is the
+  // focus target for all the fallbacks below.
+  const activeInput = useCallback((): HTMLInputElement | null => {
+    if (drawerOpen) return document.querySelector<HTMLInputElement>(".ov-drawer-q");
+    if (expanded) return inputRef.current;
+    return null;
+  }, [drawerOpen, expanded]);
+
+  // Losing focus must NEVER close a summoned surface. Over a game the overlay
+  // routinely can't hold OS focus — an earlier build closed the pill on
+  // sustained blur and the hotkey looked broken (pill opened, vanished 1.5s
+  // later, leaving only the ambient layer). So blur releases the MOUSE only:
+  // the overlay stops eating clicks while you're playing, the pill stays put,
+  // and regaining focus (or pressing the hotkey again) re-captures.
+  useEffect(() => {
+    if (!expanded && !drawerOpen) return;
+    let t: number | undefined;
+    const onBlur = () => {
+      t = window.setTimeout(() => void setCapture(false), 1500);
+    };
+    const onFocus = () => {
+      if (t) window.clearTimeout(t);
+      void setCapture(true);
+    };
+    window.addEventListener("blur", onBlur);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.removeEventListener("blur", onBlur);
+      window.removeEventListener("focus", onFocus);
+      if (t) window.clearTimeout(t);
+    };
+  }, [expanded, drawerOpen]);
+
+  // ESCAPE HATCH: Esc closes every summoned surface and releases capture even
+  // when focus is lost (capture phase, window level). When one of OUR inputs
+  // has focus, its own Esc handling wins (drawer: detail → list → close).
+  useEffect(() => {
+    const esc = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (document.activeElement?.tagName === "INPUT") return;
+      setDrawerOpen(false);
+      setExpanded(false);
+      void setCapture(false);
+    };
+    window.addEventListener("keydown", esc, true);
+    return () => window.removeEventListener("keydown", esc, true);
+  }, []);
+
+  // Belt-and-suspenders for focus: while a surface is open, ANY keystroke
+  // that lands on the window but not in its input (focus theft, a click that
+  // strayed) refocuses it — so "summon, then just type" always works.
+  useEffect(() => {
+    if (!expanded && !drawerOpen) return;
+    const onWinKey = () => {
+      const inp = activeInput();
+      if (inp && document.activeElement !== inp) inp.focus();
+    };
+    window.addEventListener("keydown", onWinKey, true);
+    return () => window.removeEventListener("keydown", onWinKey, true);
+  }, [expanded, drawerOpen, activeInput]);
+
+  // LAST RESORT for focus: if the polite grabs haven't landed OS keyboard
+  // focus shortly after summon (the Rust side retries through ~300ms), ask
+  // the shell to synthesize a real click on the input — the one thing Windows
+  // never refuses. The overlay holds cursor capture, so the game never sees it.
+  useEffect(() => {
+    if ((!expanded && !drawerOpen) || !IN_TAURI) return;
+    const t = window.setTimeout(async () => {
+      const inp = activeInput();
+      if (!inp) return;
+      if (document.hasFocus() && document.activeElement === inp) return;
+      try {
+        const [{ invoke }, { getCurrentWebviewWindow }] = await Promise.all([
+          import("@tauri-apps/api/core"),
+          import("@tauri-apps/api/webviewWindow"),
+        ]);
+        const pos = await getCurrentWebviewWindow().outerPosition(); // physical px
+        const r = inp.getBoundingClientRect();
+        const dpr = window.devicePixelRatio || 1;
+        await invoke("overlay_click_at", {
+          x: pos.x + (r.left + r.width / 2) * dpr,
+          y: pos.y + (r.top + r.height / 2) * dpr,
+        });
+      } catch (e) {
+        console.error("focus click fallback failed", e);
+      }
+    }, 500);
+    return () => window.clearTimeout(t);
+  }, [expanded, drawerOpen, activeInput]);
+
+  // Previous turns under the pill — refreshed on each summon, and again when
+  // a streaming answer finishes so the newest exchange shows up.
+  const [history, setHistory] = useState<{ role: string; content: string }[]>([]);
+  const historyRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (expanded) void fetchHistory().then(setHistory);
+  }, [expanded, card?.done]);
+  useEffect(() => {
+    historyRef.current?.scrollTo(0, historyRef.current.scrollHeight);
+  }, [history]);
+
+  // Widget scale: apply on mount, then re-apply when Settings changes it —
+  // via the Tauri broadcast (packaged app) or the storage event (web dev).
+  useEffect(() => {
+    void applyScale();
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === SCALE_KEY) void applyScale();
+    };
+    window.addEventListener("storage", onStorage);
+    let unlisten: (() => void) | undefined;
+    if (IN_TAURI) {
+      import("@tauri-apps/api/event")
+        .then(({ listen }) => listen("overlay://scale", () => void applyScale()))
+        .then((u) => {
+          unlisten = u;
+        });
+    }
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      if (unlisten) unlisten();
+    };
+  }, []);
+
   const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Escape") collapse();
+    if (e.key === "Escape") collapse(); // the card stays and decays on its timer
     if (e.key === "Enter") {
       const q = e.currentTarget.value.trim();
+      if (!q) return;
       e.currentTarget.value = "";
-      collapse();
-      if (q) {
-        setCard(q);
-        window.clearTimeout(cardTimer.current);
-        cardTimer.current = window.setTimeout(() => setCard(null), 8000);
-      }
+      setHovered(false);
+      setArmed(false);
+      // The pill STAYS open (follow-ups keep the rolling chat's context); the
+      // answer streams into the card below. Esc/click-away still collapses —
+      // the stream keeps going and the card keeps updating, just ambient.
+      void (async () => {
+        let screenshot = "";
+        if (shot && IN_TAURI) {
+          setCard({ status: "Reading your screen…", text: "", sources: [], done: false });
+          try {
+            const { invoke } = await import("@tauri-apps/api/core");
+            screenshot = (await invoke("overlay_capture_screen")) as string;
+          } catch (err) {
+            console.error("screen capture failed", err); // ask proceeds blind
+          }
+        }
+        await askAgent(q, setCard, screenshot);
+      })();
+    }
+  };
+
+  const toggleShot = () => {
+    setShot((s) => {
+      localStorage.setItem(SHOT_KEY, s ? "0" : "1");
+      return !s;
+    });
+  };
+
+  const onArmChips = async (place: CardPlace) => {
+    try {
+      await armChips(place);
+      setArmed(true);
+      setWatches(await fetchWatches());
+    } catch (e) {
+      console.error("arm chips failed", e);
+    }
+  };
+
+  const onChipClick = async (w: OverlayWatch) => {
+    if (!IN_TAURI || !w.place) return;
+    const { invoke } = await import("@tauri-apps/api/core");
+    try {
+      await invoke("overlay_open_map", { payload: w.place });
+    } catch (e) {
+      console.error("overlay_open_map failed", e);
+    }
+  };
+
+  const onChipRemove = async (w: OverlayWatch) => {
+    setWatches((ws) => ws.filter((x) => x.id !== w.id));
+    await removeWatch(w.id);
+  };
+
+  // A finished card decays after 20s — unless the pointer is on it (only
+  // possible while capture is on; in ambient state the timer just runs).
+  useEffect(() => {
+    if (!card?.done || hovered) return;
+    const t = window.setTimeout(() => setCard(null), 20000);
+    return () => window.clearTimeout(t);
+  }, [card, hovered]);
+
+  // Card action: raise the main app on the pinned zone. preventDefault on
+  // pointerdown keeps the input focused so the blur→collapse doesn't release
+  // capture before the click lands.
+  const openMap = async () => {
+    if (!IN_TAURI || !card?.place) return;
+    const { invoke } = await import("@tauri-apps/api/core");
+    try {
+      await invoke("overlay_open_map", { payload: card.place });
+    } catch (e) {
+      console.error("overlay_open_map failed", e);
     }
   };
 
   return (
     <div className="ov-root">
-      <div className={"ov-pill" + (expanded ? " open" : "")}>
-        <span className="ov-mark">✦</span>
-        {expanded && (
-          <input
-            ref={inputRef}
-            className="ov-input"
-            placeholder="Ask Eorzea…  (Esc to close)"
-            onKeyDown={onKey}
-            onBlur={collapse}
-          />
+      {/* Click-away for the pill (same contract as the drawer's backdrop):
+          clicking anywhere that isn't overlay UI collapses and returns the
+          mouse to the game. */}
+      {expanded && <div className="ov-drawer-backdrop" onPointerDown={collapse} />}
+      <div className="ov-ask" ref={ask.ref} style={ask.style}>
+        <div className={"ov-pill" + (expanded ? " open" : "")}>
+          <span
+            className="ov-mark"
+            onPointerDown={ask.onPointerDown}
+            title={expanded ? "Drag to move" : undefined}
+          >
+            ✦
+          </span>
+          {expanded && (
+            <>
+              {/* NO onBlur-collapse: over a game, focus flaps while the shell
+                  fights for the keyboard, and a transient blur used to close
+                  the pill the instant it opened ("the hotkey just shows the
+                  chip layer"). Click-away is the backdrop's job now, exactly
+                  like the drawer — which never had this bug. */}
+              <input
+                ref={inputRef}
+                className="ov-input"
+                placeholder="Ask Eorzea…  (Esc to close)"
+                onKeyDown={onKey}
+              />
+              <label
+                className={"ov-cam" + (shot ? " on" : "")}
+                onPointerDown={(e) => e.preventDefault()}
+                title={shot ? "Sending your screen with each ask (uncheck to stop)"
+                            : "Screen NOT included — check to let the agent see your game"}
+              >
+                <span className="ov-cam-ico">📷</span>
+                <span className="ov-cam-box">{shot ? "✓" : ""}</span>
+                <input
+                  type="checkbox"
+                  checked={shot}
+                  onChange={toggleShot}
+                  style={{ display: "none" }}
+                />
+              </label>
+            </>
+          )}
+        </div>
+
+        {expanded && history.length > 0 && (
+          <div className="ov-history" ref={historyRef}>
+            {history.map((m, i) => (
+              <div key={i} className={"ov-hist-msg " + m.role}>
+                {plainText(m.content)}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {card && (
+          <div
+            className="ov-card"
+            onMouseEnter={() => setHovered(true)}
+            onMouseLeave={() => setHovered(false)}
+          >
+            {card.status && (
+              <div className="ov-card-status">
+                <span className="ov-spin" />
+                {card.status}
+              </div>
+            )}
+            {card.error ? (
+              <div className="ov-card-err">{card.error}</div>
+            ) : (
+              card.text && <div className="ov-card-body">{plainText(card.text)}</div>
+            )}
+            {card.done && !card.error && (card.place || card.sources.length > 0) && (
+              <div className="ov-card-foot">
+                {card.place && (
+                  <button
+                    className="ov-card-btn"
+                    onPointerDown={(e) => e.preventDefault()}
+                    onClick={() => void openMap()}
+                  >
+                    Open map
+                  </button>
+                )}
+                {card.place && (
+                  <button
+                    className="ov-card-btn"
+                    disabled={armed}
+                    onPointerDown={(e) => e.preventDefault()}
+                    onClick={() => card.place && void onArmChips(card.place)}
+                  >
+                    {armed
+                      ? "Armed ✓"
+                      : card.place.pins?.length
+                        ? `Arm chips (${card.place.pins.length})`
+                        : "Arm chip"}
+                  </button>
+                )}
+                {card.sources.length > 0 && (
+                  <span className="ov-card-src">{card.sources.join(" · ")}</span>
+                )}
+              </div>
+            )}
+          </div>
         )}
       </div>
 
-      {card && (
-        <div className="ov-card">
-          <div className="ov-card-title">Phase-0 echo</div>
-          <div className="ov-card-body">{card}</div>
-          <div className="ov-card-hint">auto-dismisses in 8s</div>
-        </div>
+      {drawerOpen && (
+        <Drawer
+          onClose={closeDrawer}
+          dragRef={drawerDrag.ref}
+          dragStyle={drawerDrag.style}
+          onDragStart={drawerDrag.onPointerDown}
+        />
       )}
 
-      <div className="ov-chip">Cordia Sap · opens 12:34</div>
+      {/* The chips rail: armed watches, ambient + click-through. While the
+          pill is open (capture on) each chip is clickable (open in app) and
+          removable; the rail drags as one group. */}
+      {watches.length > 0 && (
+        <div className="ov-chips" ref={chips.ref} style={chips.style}>
+          {watches.map((w) => (
+            <div
+              key={w.id}
+              className={"ov-chip" + (expanded ? " arrange" : "")}
+              onPointerDown={chips.onPointerDown}
+              title={expanded ? "Click to open in the app · drag to move" : undefined}
+            >
+              <span className="ov-chip-label" onClick={() => void onChipClick(w)}>
+                {w.label}
+                {chipTime(w)}
+              </span>
+              {expanded && (
+                <button
+                  className="ov-chip-x"
+                  onPointerDown={(e) => { e.stopPropagation(); e.preventDefault(); }}
+                  onClick={() => void onChipRemove(w)}
+                  title="Remove"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

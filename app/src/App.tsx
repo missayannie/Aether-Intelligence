@@ -50,6 +50,17 @@ const DB_KINDS: { id: DbKind; label: string; icon: string }[] = [
 ];
 const kindIcon = (t: string) => DB_KINDS.find((k) => k.id === t)?.icon ?? "•";
 
+// Overlay hotkeys: accelerator strings the Rust shell parses ("Alt+Backquote").
+// Edited in Settings via HotkeyField, applied live by set_overlay_hotkeys.
+type OverlayHotkeySet = { ask: string; ambient: string; kill: string; drawer: string };
+const OVERLAY_HOTKEY_DEFAULTS: OverlayHotkeySet = {
+  ask: "Alt+Backquote",
+  // Alt+Shift+`, not Alt+Win+` — Windows reserves several Win+Alt combos.
+  ambient: "Alt+Shift+Backquote",
+  kill: "Alt+Backslash",
+  drawer: "Alt+D",
+};
+
 // Real per-type icons — the SAME images Garland Tools' own Browse toolbar uses
 // (read off their live page), so the kind selector and browse chips look like
 // the site the data comes from. Emoji stay as the on-error fallback.
@@ -164,7 +175,7 @@ import AnnotationEditor from "./AnnotationEditor";
 import Editor from "./Editor";
 import GameMap, { MapNavBar } from "./GameMap";
 import BrowserPane, { type BrowserReq } from "./BrowserPane";
-import type { ZoneMap } from "./api";
+import type { OverlayWatch, ZoneMap } from "./api";
 import "./App.css";
 
 // Render assistant text as formatted markdown (headings, lists, bold, links,
@@ -729,6 +740,38 @@ export default function App() {
   // reads this at startup and only re-scrapes profiles that are over 24h stale, so
   // leaving it on doesn't hammer the Lodestone on every restart.
   const [refreshOnStart, setRefreshOnStart] = useState<boolean>(true);
+  // Closing the main window hides it to the system tray — the overlay and
+  // backend keep working; reopen from the tray icon. The Rust shell owns the
+  // actual close behavior, so every change is pushed to it (set_close_to_tray).
+  const [closeToTray, setCloseToTray] = useState<boolean>(false);
+  const changeCloseToTray = (v: boolean) => {
+    setCloseToTray(v);
+    import("@tauri-apps/api/core")
+      .then(({ invoke }) => invoke("set_close_to_tray", { enabled: v }))
+      .catch(() => { /* plain-web dev */ });
+  };
+
+  // Overlay hotkeys — editable in Settings, applied live by the Rust shell.
+  // Values are global-shortcut accelerator strings ("Alt+Backquote").
+  const [overlayHotkeys, setOverlayHotkeys] = useState<OverlayHotkeySet>(OVERLAY_HOTKEY_DEFAULTS);
+  const applyOverlayHotkeys = async (next: OverlayHotkeySet): Promise<string> => {
+    const prev = overlayHotkeys;
+    setOverlayHotkeys(next);
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("set_overlay_hotkeys", next as unknown as Record<string, string>);
+      return "";
+    } catch (e) {
+      // Web dev has no shell — keep the state; a real bind error reverts.
+      const msg = String(e);
+      if (msg.includes("Can't parse") || msg.includes("must be different")
+          || msg.includes("RegisterHotKey") || msg.includes("hotkey")) {
+        setOverlayHotkeys(prev);
+        return msg;
+      }
+      return "";
+    }
+  };
 
   const [chats, setChats] = useState<ChatSummary[]>([]);
   const [chatId, setChatId] = useState<string>("");
@@ -769,6 +812,74 @@ export default function App() {
         (document.documentElement.style as any).zoom = String(fontScale);
       });
   }, [fontScale]);
+
+  // Overlay widget scale. Edited only here in the main app's Settings; the
+  // overlay window picks it up from localStorage on mount and live via the
+  // overlay://scale broadcast (a storage event alone isn't guaranteed to fire
+  // across Tauri windows).
+  const [overlayScale, setOverlayScale] = useState<number>(() => {
+    const v = parseFloat(localStorage.getItem("overlayScale") || "1");
+    return isNaN(v) ? 1 : Math.min(1.6, Math.max(0.7, v));
+  });
+  const bumpOverlayScale = (d: number) =>
+    setOverlayScale((s) => Math.min(1.6, Math.max(0.7, +(s + d).toFixed(2))));
+  useEffect(() => {
+    localStorage.setItem("overlayScale", String(overlayScale));
+    import("@tauri-apps/api/event")
+      .then(({ emit }) => emit("overlay://scale", overlayScale))
+      .catch(() => { /* plain-web dev: the overlay tab hears the storage event */ });
+  }, [overlayScale]);
+
+  // The overlay drawer's "Open in app": land on that database record.
+  useEffect(() => {
+    let un: (() => void) | undefined;
+    import("@tauri-apps/api/event")
+      .then(({ listen }) =>
+        listen("overlay://open-db", (e) => {
+          const p = e.payload as { kind?: string; id?: string };
+          if (p?.kind && p?.id) {
+            setTab("eorzeadb");
+            void openDbKind(p.kind, p.id);
+          }
+        }))
+      .then((u) => { un = u; })
+      .catch(() => { /* plain-web dev */ });
+    return () => { if (un) un(); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The overlay's "Open map" card action: the Rust side focuses this window
+  // and forwards the map payload (same shape as a chat `map` event). Global
+  // listen() + emit_to("main") — the proven embed-nav pattern.
+  useEffect(() => {
+    let un: (() => void) | undefined;
+    import("@tauri-apps/api/event")
+      .then(({ listen }) =>
+        listen("overlay://open-map", (e) => {
+          const p = e.payload as {
+            zone?: string;
+            focus?: { x: number; y: number } | null;
+            pin?: { x: number; y: number; label: string; icon?: string;
+                    radius_px?: number; space?: "map" | "game" } | null;
+            pins?: { x: number; y: number; label?: string }[] | null;
+            category?: string;
+            icon?: string;
+          };
+          if (p?.zone) {
+            void openZoneMap(p.zone, "", true, p.focus ?? null,
+                             // Chat map events are 2048 map space; node
+                             // watches carry GAME coords and say so.
+                             p.pin ? { ...p.pin, space: p.pin.space === "game" ? "game" : "map" } : null,
+                             p.pins?.length
+                               ? { category: p.category || "Points", icon: p.icon || undefined,
+                                   space: "map",
+                                   pins: p.pins.map((x) => ({ ...x, label: x.label || "" })) }
+                               : null);
+          }
+        }))
+      .then((u) => { un = u; })
+      .catch(() => { /* plain-web dev: no overlay window exists */ });
+    return () => { if (un) un(); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Ctrl/Cmd + ] increases text size, Ctrl/Cmd + [ decreases it.
   useEffect(() => {
@@ -881,9 +992,30 @@ export default function App() {
           if (typeof s.density === "string") setDensity(s.density);
           if (typeof s.refresh_profile_on_start === "boolean")
             setRefreshOnStart(s.refresh_profile_on_start);
+          if (typeof s.closeToTray === "boolean") {
+            setCloseToTray(s.closeToTray);
+            // Push to the Rust shell, which owns the close behavior.
+            import("@tauri-apps/api/core")
+              .then(({ invoke }) => invoke("set_close_to_tray", { enabled: s.closeToTray }))
+              .catch(() => { /* plain-web dev */ });
+          }
+          // V2 on purpose: the V1 bindings could end up with the ambient
+          // combo shadowing the ask pill — everyone migrates to fresh
+          // defaults once (ask=Alt+`, ambient=Alt+Shift+`), then edits stick.
+          if (s.overlayHotkeysV2 && typeof s.overlayHotkeysV2 === "object") {
+            const saved = { ...OVERLAY_HOTKEY_DEFAULTS,
+                            ...(s.overlayHotkeysV2 as Partial<OverlayHotkeySet>) };
+            setOverlayHotkeys(saved);
+            import("@tauri-apps/api/core")
+              .then(({ invoke }) =>
+                invoke("set_overlay_hotkeys", saved as unknown as Record<string, string>))
+              .catch(() => { /* plain-web dev, or a taken combo — defaults stay */ });
+          }
           if (typeof s.splitView === "boolean") setSplitView(s.splitView);
           if (typeof s.splitW === "number") setSplitW(Math.max(MIN_SPLIT_W, s.splitW));
           if (typeof s.fontScale === "number") setFontScale(s.fontScale);
+          if (typeof s.overlayScale === "number")
+            setOverlayScale(Math.min(1.6, Math.max(0.7, s.overlayScale)));
           if (typeof s.activeWs === "string") setActiveWs(s.activeWs);
           if (typeof s.leftW === "number") setLeftW(s.leftW);
           if (typeof s.rightW === "number") setRightW(Math.max(MIN_PANEL_W, s.rightW));
@@ -906,16 +1038,17 @@ export default function App() {
     const t = window.setTimeout(() => {
       api
         .putAppSettings({
-          theme, density, fontScale, activeWs, leftW, rightW, bottomH, dock,
+          theme, density, fontScale, overlayScale, activeWs, leftW, rightW, bottomH, dock,
           refresh_profile_on_start: refreshOnStart,
+          closeToTray, overlayHotkeysV2: overlayHotkeys,
           defaultModel: model, defaultAuth: auth,
           splitView, splitW,
         })
         .catch(() => {});
     }, 400);
     return () => window.clearTimeout(t);
-  }, [theme, density, fontScale, activeWs, leftW, rightW, bottomH, dock, refreshOnStart,
-      model, auth, splitView, splitW]);
+  }, [theme, density, fontScale, overlayScale, activeWs, leftW, rightW, bottomH, dock,
+      refreshOnStart, closeToTray, overlayHotkeys, model, auth, splitView, splitW]);
 
   const dragTab = useRef<TabId | null>(null);
   const hgutter = useRef(false);
@@ -1270,7 +1403,11 @@ export default function App() {
   }
   const wsName = (slug: string) => workspaces.find((w) => w.slug === slug)?.display_name || slug;
   const profileWorkspaces = workspaces.filter((w) => w.kind === "profile");
-  const scopedChats = chats.filter((c) => c.owner === activeWs);
+  const allScopedChats = chats.filter((c) => c.owner === activeWs);
+  // The in-game Ask pill's chats sit in their own sidebar section — they're a
+  // running log of play-time questions, not something to mix into the list.
+  const scopedChats = allScopedChats.filter((c) => c.surface !== "overlay");
+  const overlayChats = allScopedChats.filter((c) => c.surface === "overlay");
 
   function chatRow(c: ChatSummary) {
     return (
@@ -1646,9 +1783,24 @@ export default function App() {
   const [dbHits, setDbHits] = useState<DbHit[]>([]);
   const [dbUrl, setDbUrl] = useState<string>("");
   const [dbItem, setDbItem] = useState<DbItem | null>(null);
+  // (nodeWatchId + its sync effect live below, after dbDoc is declared.)
   // Non-item records (duty, quest, NPC, fate…) render from this uniform shape.
   const [dbDoc, setDbDoc] = useState<DbDetailDoc | null>(null);
   const [dbBusy, setDbBusy] = useState(false);
+  // The open node's overlay watch id ("" = not watched). Derived from the real
+  // watch list on detail open, so the button is a true TOGGLE: click to watch,
+  // click again to stop.
+  const [nodeWatchId, setNodeWatchId] = useState("");
+  useEffect(() => {
+    setNodeWatchId("");
+    if (dbDoc?.kind !== "node" || !dbDoc.id) return;
+    api.overlayWatches()
+      .then((r) => {
+        const w = r.watches.find((x) => x.kind === "node" && x.ref === dbDoc.id);
+        if (w) setNodeWatchId(w.id);
+      })
+      .catch(() => {});
+  }, [dbDoc]); // eslint-disable-line react-hooks/exhaustive-deps
   const [dbErr, setDbErr] = useState("");
   // --- Browse tool (the tab's empty state, like Garland's own Browse) ---
   const [browseKind, setBrowseKind] = useState("instance");
@@ -2124,7 +2276,15 @@ export default function App() {
               className="db-q"
               value={dbQuery}
               placeholder="Search the database…"
-              onChange={(e) => setDbQuery(e.target.value)}
+              onChange={(e) => {
+                setDbQuery(e.target.value);
+                // Clearing the box returns to the browse view IMMEDIATELY —
+                // stale results used to sit there until the next search.
+                if (!e.target.value.trim()) {
+                  setDbHits([]);
+                  setDbErr("");
+                }
+              }}
             />
             <button className="db-go" type="submit" disabled={dbBusy || !dbQuery.trim()}>
               {dbBusy ? "…" : "Search"}
@@ -2374,6 +2534,37 @@ export default function App() {
                       </div>
                     );
                   })()}
+                  {/* Gathering nodes can live on the in-game overlay as a chip —
+                      timed nodes get a spawn countdown (the backend derives the
+                      windows from the node id). A true toggle: click again to
+                      stop watching. */}
+                  {dbDoc.kind === "node" && (
+                    <div className="db-row">
+                      <span className="db-row-ico">⏱</span>
+                      <span className="db-row-main">
+                        <button
+                          className="db-zone-link"
+                          title={nodeWatchId
+                            ? "Click to stop showing this node on the in-game overlay"
+                            : "Show this node as a chip on the in-game overlay"}
+                          onClick={async () => {
+                            try {
+                              if (nodeWatchId) {
+                                await api.overlayWatchRemove(nodeWatchId);
+                                setNodeWatchId("");
+                              } else {
+                                const r = await api.overlayWatchAdd(
+                                  { kind: "node", ref: dbDoc.id, label: "" });
+                                setNodeWatchId(r.watch.id);
+                              }
+                            } catch { /* backend away — leave the button */ }
+                          }}
+                        >
+                          {nodeWatchId ? "Watching on overlay ✓ (click to stop)" : "Watch on overlay"}
+                        </button>
+                      </span>
+                    </div>
+                  )}
                   {dbDoc.links?.map((g) => (
                     <div className="db-sources" key={g.group}>
                       <div className="db-sec-h">{g.group}</div>
@@ -2412,6 +2603,24 @@ export default function App() {
             </div>
           ) : (
             <div className="db-hits">
+              {/* Catalogue chips stay at the top in BOTH states — during a
+                  result list they double as the way back to browsing (one
+                  click clears the search and opens that catalogue). */}
+              <div className="db-browse-chips">
+                {BROWSE_UI.map((b) => (
+                  <button key={b.id}
+                          className={"db-chip" +
+                            (browseKind === b.id && !dbHits.length ? " on" : "")}
+                          onClick={() => {
+                            setDbHits([]);
+                            setDbErr("");
+                            setDbQuery("");
+                            loadBrowse(b.id);
+                          }}>
+                    <TypeIcon id={b.id} emoji={b.icon} /> {b.label}
+                  </button>
+                ))}
+              </div>
               {dbHits.map((h) => (
                 <button key={h.url} className="db-hit" onClick={() => openDbUrl(h.url)}>
                   {h.icon ? (
@@ -2427,15 +2636,6 @@ export default function App() {
                 // The tab's resting state is a BROWSE TOOL, like Garland's own:
                 // pick a catalogue, expand a group, click a record.
                 <div className="db-browse">
-                  <div className="db-browse-chips">
-                    {BROWSE_UI.map((b) => (
-                      <button key={b.id}
-                              className={"db-chip" + (browseKind === b.id ? " on" : "")}
-                              onClick={() => loadBrowse(b.id)}>
-                        <TypeIcon id={b.id} emoji={b.icon} /> {b.label}
-                      </button>
-                    ))}
-                  </div>
                   {browseBusy && !browseData[browseKind] && (
                     <div className="muted small">Loading…</div>
                   )}
@@ -2884,13 +3084,32 @@ export default function App() {
                 >
                   <IconFolder />
                 </button>
-                <button className="composer-model" onClick={() => setPickerOpen((o) => !o)}>
-                  {activeModel ? activeModel.label : "No model"}
-                  {activeModel?.available && (
-                    <span className="pill-auth">{auth === "subscription" ? "sub" : "API"}</span>
-                  )}{" "}
-                  ▴
-                </button>
+                <span className="model-anchor">
+                  <button className="composer-model" onClick={() => setPickerOpen((o) => !o)}>
+                    {activeModel ? activeModel.label : "No model"}
+                    {activeModel?.available && (
+                      <span className="pill-auth">{auth === "subscription" ? "sub" : "API"}</span>
+                    )}{" "}
+                    ▴
+                  </button>
+                  {pickerOpen && (
+                    <ModelPicker
+                      up
+                      models={models}
+                      current={model}
+                      currentAuth={auth}
+                      onPick={(id, a) => {
+                        setModel(id);
+                        setAuth(a);
+                        setPickerOpen(false);
+                      }}
+                      onManage={() => {
+                        setPickerOpen(false);
+                        setSettingsOpen(true);
+                      }}
+                    />
+                  )}
+                </span>
                 <span className="ctx-meter" title="Approximate context used for this chat">
                   <span className="ctx-bar">
                     <span className="ctx-fill" style={{ width: `${ctxPct}%` }} />
@@ -2951,23 +3170,6 @@ export default function App() {
                   </button>
                 )}
               </div>
-              {pickerOpen && (
-                <ModelPicker
-                  up
-                  models={models}
-                  current={model}
-                  currentAuth={auth}
-                  onPick={(id, a) => {
-                    setModel(id);
-                    setAuth(a);
-                    setPickerOpen(false);
-                  }}
-                  onManage={() => {
-                    setPickerOpen(false);
-                    setSettingsOpen(true);
-                  }}
-                />
-              )}
             </div>
           </div>
     </>
@@ -3017,6 +3219,12 @@ export default function App() {
             {scopedChats.length === 0 && <div className="muted small">No chats yet</div>}
             {scopedChats.map(chatRow)}
           </div>
+          {overlayChats.length > 0 && (
+            <>
+              <div className="recent-label">✦ Overlay</div>
+              <div className="chat-list">{overlayChats.map(chatRow)}</div>
+            </>
+          )}
           <UsageMeter />
           {/* Plain anchors: the delegated link interceptor routes both into the
               in-app browser tab, same as every other external link. */}
@@ -3184,6 +3392,10 @@ export default function App() {
           onDensity={setDensity}
           refreshOnStart={refreshOnStart}
           onRefreshOnStart={setRefreshOnStart}
+          closeToTray={closeToTray}
+          onCloseToTray={changeCloseToTray}
+          overlayHotkeys={overlayHotkeys}
+          onOverlayHotkeys={applyOverlayHotkeys}
           models={models}
           model={model}
           auth={auth}
@@ -3192,6 +3404,9 @@ export default function App() {
           fontScale={fontScale}
           onFont={bumpFont}
           onFontReset={() => setFontScale(1)}
+          overlayScale={overlayScale}
+          onOverlayScale={bumpOverlayScale}
+          onOverlayReset={() => setOverlayScale(1)}
           activeWs={activeWs}
           workspace={activeWsMeta}
           onWsChanged={refreshWorkspaces}
@@ -3245,7 +3460,7 @@ export default function App() {
   // action so the player gets a definite confirmation that they're stored.
   async function saveSettingsNow() {
     await api.putAppSettings({
-      theme, density, fontScale, activeWs, leftW, rightW, bottomH, dock,
+      theme, density, fontScale, overlayScale, activeWs, leftW, rightW, bottomH, dock,
       refresh_profile_on_start: refreshOnStart,
       defaultModel: model, defaultAuth: auth,
       splitView, splitW,
@@ -3439,6 +3654,80 @@ function WorkspaceSettings({ slug, workspace, onChanged, onDeleted, onOpenFile }
   );
 }
 
+// Everything armed on the in-game overlay (chips) — see it all, stop any of
+// it. Lives in Settings under "Background & overlay"; the same list the
+// overlay's own ✕ buttons and the arm points write to.
+function OverlayWatchList() {
+  const [watches, setWatches] = useState<OverlayWatch[]>([]);
+  useEffect(() => {
+    api.overlayWatches().then((r) => setWatches(r.watches)).catch(() => {});
+  }, []);
+  const kindMark = (w: OverlayWatch) =>
+    w.kind === "node" ? "⏱" : w.kind === "pinset" ? `📍×${w.pins?.length || 0}` : "📍";
+  return (
+    <div className="ovw-list">
+      <span className="toggle-name">Watching on overlay</span>
+      {watches.length === 0 ? (
+        <span className="toggle-hint">
+          Nothing armed. Arm chips from an answer card's "Arm chips", a map
+          pin's "⏱ Watch", or a node page's "Watch on overlay".
+        </span>
+      ) : (
+        watches.map((w) => (
+          <div key={w.id} className="ovw-row">
+            <span className="ovw-kind">{kindMark(w)}</span>
+            <span className="ovw-label">{w.label}</span>
+            {w.zone && <span className="ovw-zone">{w.zone}</span>}
+            <button
+              className="ovw-x"
+              title="Stop watching"
+              onClick={() => {
+                setWatches((ws) => ws.filter((x) => x.id !== w.id));
+                api.overlayWatchRemove(w.id).catch(() => {});
+              }}
+            >
+              ✕
+            </button>
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
+/** Records one hotkey: focus the field, press the combo. Requires a modifier
+ * (a bare global "E" would eat the key everywhere in Windows); Esc cancels. */
+function HotkeyField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [rec, setRec] = useState(false);
+  const pretty = (acc: string) =>
+    acc.replace("Backquote", "`").replace("Backslash", "\\")
+       .replace("Control", "Ctrl").replace("Super", "Win");
+  return (
+    <input
+      className="ovk-field"
+      readOnly
+      value={rec ? "Press keys…" : pretty(value)}
+      title="Click, then press the key combination (Esc cancels)"
+      onFocus={() => setRec(true)}
+      onBlur={() => setRec(false)}
+      onKeyDown={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.key === "Escape") { e.currentTarget.blur(); return; }
+        if (/^(Alt|Control|Shift|Meta)/.test(e.code)) return; // modifiers alone: keep waiting
+        const mods = [
+          e.ctrlKey && "Ctrl", e.altKey && "Alt",
+          e.shiftKey && "Shift", e.metaKey && "Super",
+        ].filter(Boolean) as string[];
+        if (!mods.length) return;
+        const key = e.code.replace(/^Key/, "").replace(/^Digit/, "");
+        onChange([...mods, key].join("+"));
+        e.currentTarget.blur();
+      }}
+    />
+  );
+}
+
 function Settings(props: {
   onClose: () => void;
   onSaved: () => void;
@@ -3448,6 +3737,11 @@ function Settings(props: {
   onDensity: (id: string) => void;
   refreshOnStart: boolean;
   onRefreshOnStart: (on: boolean) => void;
+  closeToTray: boolean;
+  onCloseToTray: (on: boolean) => void;
+  overlayHotkeys: OverlayHotkeySet;
+  // Applies + persists; resolves to "" on success or a bind error to show.
+  onOverlayHotkeys: (s: OverlayHotkeySet) => Promise<string>;
   models: Model[];
   model: string;
   auth: Auth;
@@ -3456,6 +3750,9 @@ function Settings(props: {
   fontScale: number;
   onFont: (delta: number) => void;
   onFontReset: () => void;
+  overlayScale: number;
+  onOverlayScale: (delta: number) => void;
+  onOverlayReset: () => void;
   activeWs: string;
   workspace: Workspace | undefined;
   onWsChanged: () => void;
@@ -3474,6 +3771,7 @@ function Settings(props: {
   const [subDraft, setSubDraft] = useState("");
   const [saveErr, setSaveErr] = useState("");
   const [settingsSaved, setSettingsSaved] = useState(false);
+  const [hkErr, setHkErr] = useState("");   // overlay hotkey bind error, shown inline
   const [sharedCtx, setSharedCtx] = useState("");
 
   async function saveSettings() {
@@ -3590,6 +3888,15 @@ function Settings(props: {
           <span className="fs-hint">or press Ctrl + [ / Ctrl + ]</span>
         </div>
 
+        <div className="section-label">Overlay size</div>
+        <div className="fontsize-row">
+          <button className="fs-btn" onClick={() => props.onOverlayScale(-0.1)}>A−</button>
+          <span className="fs-val">{Math.round(props.overlayScale * 100)}%</span>
+          <button className="fs-btn" onClick={() => props.onOverlayScale(0.1)}>A+</button>
+          <button className="fs-reset" onClick={props.onOverlayReset}>Reset</button>
+          <span className="fs-hint">Size of the in-game overlay widgets — pill, cards, chips</span>
+        </div>
+
         <div className="section-label">Density</div>
         <div className="density-row">
           {[
@@ -3649,6 +3956,58 @@ function Settings(props: {
             </span>
           </span>
         </label>
+
+        <div className="section-label">Background &amp; overlay</div>
+        <OverlayWatchList />
+        <label className="toggle-row">
+          <input
+            type="checkbox"
+            checked={props.closeToTray}
+            onChange={(e) => props.onCloseToTray(e.target.checked)}
+          />
+          <span className="toggle-text">
+            <span className="toggle-name">Keep running in the background</span>
+            <span className="toggle-hint">
+              Closing this window hides it to the system tray (bottom-right of
+              the taskbar) instead of quitting — the in-game overlay keeps
+              working. Click the tray icon and choose "Open Aether Intelligence"
+              to bring the app back, or "Quit" to exit fully. When off, closing
+              the app also closes the overlay.
+            </span>
+          </span>
+        </label>
+
+        <div className="ovk-rows">
+          <span className="toggle-name">Overlay shortcuts</span>
+          <span className="toggle-hint">
+            Click a field, then press the key combination — it must include
+            Ctrl, Alt, Shift, or Win. Esc cancels. Applied immediately.
+          </span>
+          {([["ask", "Open the Ask pill"],
+             ["drawer", "Open the database drawer"],
+             ["ambient", "Show overlay (widgets only)"],
+             ["kill", "Hide / show overlay"]] as const).map(([k, label]) => (
+            <div className="ovk-row" key={k}>
+              <span className="ovk-label">{label}</span>
+              <HotkeyField
+                value={props.overlayHotkeys[k]}
+                onChange={(v) => {
+                  void props.onOverlayHotkeys({ ...props.overlayHotkeys, [k]: v })
+                    .then(setHkErr);
+                }}
+              />
+            </div>
+          ))}
+          {hkErr && <span className="ovk-err">{hkErr}</span>}
+          <button
+            className="ovk-reset"
+            onClick={() => {
+              void props.onOverlayHotkeys({ ...OVERLAY_HOTKEY_DEFAULTS }).then(setHkErr);
+            }}
+          >
+            Reset to defaults
+          </button>
+        </div>
 
         <div className="section-label">Theme</div>
         <div className="theme-grid">

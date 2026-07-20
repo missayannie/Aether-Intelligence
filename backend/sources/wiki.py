@@ -100,7 +100,8 @@ class WikiClient:
         hits = self._get_json(self._api(wiki_id), params).get("query", {}).get("search", [])
         return [{"title": h["title"], "snippet": _strip_html(h.get("snippet", ""))} for h in hits]
 
-    def get_page(self, wiki_id: str, title: str, chars: int = 1500) -> WikiResult | None:
+    def get_page(self, wiki_id: str, title: str, chars: int = 1500,
+                 query: str = "") -> WikiResult | None:
         """Fetch a page's plain-text intro and canonical URL.
 
         Uses action=parse (lead section, section 0) rather than the TextExtracts
@@ -135,7 +136,14 @@ class WikiClient:
             url=page.get("fullurl", ""),
             details=_extract_infobox(html),
             image_url=_main_image(html, _origin(self._api(wiki_id)), resolved_title),
-            tables=_extract_tables(html),
+            # Tables AND section bullet lists — both are where wikis keep the
+            # actual data (drop grids, reward catalogues). The query steers
+            # which sections win the budget on oversized pages — minus the
+            # page-title words, which would boost every section equally
+            # ("Cosmic Fortunes" ranking high because the query said "Cosmic").
+            tables=(_extract_tables(html) + "\n\n"
+                    + _extract_section_lists(html, query=_query_minus_title(
+                        query, resolved_title))).strip(),
         )
 
     def _page_html(self, wiki_id: str, title: str) -> str:
@@ -161,19 +169,44 @@ class WikiClient:
         # rather than crashing on a missing config entry.
         if wiki_id not in WIKIS:
             wiki_id = "consolegames"
-        direct = self.get_page(wiki_id, query, chars=chars)
+        # Models send Google-style quoted phrases; MediaWiki takes them
+        # literally and finds nothing. Strip before any resolution.
+        query = query.replace('"', " ").strip()
+        direct = self.get_page(wiki_id, query, chars=chars, query=query)
         if direct and direct.extract:
             return direct
 
         hits = self.search(wiki_id, query, limit=5)
+        if not hits:
+            # This wiki's search is effectively AND: "Cosmic Exploration
+            # mounts" gets ZERO hits even though the page exists (one flailing
+            # chat logged ~40 such misses). Retry with the TitleCase run —
+            # the page-name part of the query; the leftover words still steer
+            # section extraction via `query`.
+            import re
+            runs = re.findall(r"[A-Z][\w']*(?: [A-Z][\w']*)+", query)
+            for run in sorted(runs, key=len, reverse=True)[:2]:
+                hits = self.search(wiki_id, run, limit=5)
+                if hits:
+                    break
         best = next((h for h in hits if h["title"].lower() == query.lower()), None)
         if not best and hits:
             best = hits[0]
         if best:
-            page = self.get_page(wiki_id, best["title"], chars=chars)
+            page = self.get_page(wiki_id, best["title"], chars=chars, query=query)
             if page and page.extract:
                 return page
         return direct
+
+
+def _query_minus_title(query: str, title: str) -> str:
+    """The query words that are NOT part of the resolved page title — the part
+    that says what the caller wants FROM the page ("mounts", "outfits")."""
+    import re
+    title_words = {w.rstrip("s") for w in re.findall(r"[a-z]{3,}", title.lower())}
+    kept = [w for w in query.split()
+            if w.strip('"').lower().rstrip("s") not in title_words]
+    return " ".join(kept)
 
 
 def _strip_html(text: str) -> str:
@@ -289,6 +322,119 @@ def _extract_tables(html: str, max_chars: int = 6000) -> str:
             break
         out.append(block)
         used += len(block)
+    return "\n\n".join(out)
+
+
+def _extract_section_lists(html: str, max_chars: int = 6000, query: str = "") -> str:
+    """Per-section content — paragraphs AND bullet lists — flattened for the model.
+
+    Tables aren't the only place wikis keep data: reward and unlock catalogues
+    are often icon+link BULLET LISTS under an h2/h3 (Cosmic Exploration keeps
+    its whole Mounts/Glamour rewards list this way), and some facts live only
+    in mid-page PROSE ("completing Mech Ops rewards the ... mount") that the
+    1500-char lead extract never reaches. Case study: without these, GPT-5.4
+    mini re-searched one page ~50 times across 24 rounds looking for content
+    that was on it all along. Same bounds philosophy as _extract_tables: this
+    text rides into the model's context on every lookup.
+    """
+    import re
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+    root = soup.find("div", class_="mw-parser-output") or soup
+    # Sections that are navigation/citation/media chrome or patch-note noise,
+    # never answer data.
+    skip_headings = {
+        "contents", "references", "navigation", "resources", "external links",
+        "gallery", "screenshots", "concept art", "history", "trivia",
+    }
+    prose_cap = 900   # per section — keeps one lore-heavy section from eating the budget
+
+    def _chrome(el) -> bool:
+        for anc in el.parents:
+            cls = " ".join(anc.get("class") or []) + " " + (anc.get("id") or "")
+            if any(k in cls for k in ("toc", "navbox", "infobox", "gallery", "reference")):
+                return True
+        return False
+
+    # Pass 1: one walk in document order, grouping content under its heading.
+    # (find_all preserves document order; tracking the current heading here
+    # avoids an O(n²) find_all_previous per element on 400KB pages.)
+    sections: list[tuple[str, list[str], list[str]]] = []  # (heading, prose, items)
+    heading, prose, items = "", [], []
+
+    def _flush():
+        nonlocal heading, prose, items
+        keep_prose = prose if heading else []  # lead prose already ships as `extract`
+        if heading.lower() not in skip_headings and (len(items) >= 2 or keep_prose):
+            sections.append((heading, keep_prose, items))
+        heading, prose, items = "", [], []
+
+    for el in root.find_all(["h2", "h3", "h4", "p", "ul"]):
+        if el.name in ("h2", "h3", "h4"):
+            _flush()
+            heading = el.get_text(" ", strip=True).replace("[edit]", "").strip()
+            continue
+        if _chrome(el) or el.find_parent("table"):
+            continue
+        if el.name == "p":
+            txt = re.sub(r"\s+", " ", el.get_text(" ", strip=True))
+            if len(txt) >= 40:  # shorter = captions/stubs
+                prose.append(txt)
+        else:  # ul — top-level only; nested ones ride along with their parent item
+            if el.find_parent("ul"):
+                continue
+            for li in el.find_all("li", recursive=False):
+                for sub in li.find_all("ul"):
+                    sub.extract()  # child items would otherwise repeat as their own text
+                txt = re.sub(r"\s+", " ", li.get_text(" ", strip=True))
+                if txt:
+                    items.append(txt[:200])
+    _flush()
+
+    blocks: list[tuple[str, str]] = []  # (heading, block text)
+    for heading, prose, items in sections:
+        parts = []
+        if prose:
+            p = " ".join(prose)
+            parts.append(p[:prose_cap] + ("…" if len(p) > prose_cap else ""))
+        if len(items) >= 2:  # a one-item "list" is layout, not data
+            body = "\n".join("- " + i for i in items[:60])
+            if len(items) > 60:
+                body += f"\n(+{len(items) - 60} more)"
+            parts.append(body)
+        if not parts:
+            continue
+        blocks.append((heading, (f"## {heading}\n" if heading else "") + "\n".join(parts)))
+
+    # Pass 2: the budget goes to query-relevant sections first. A huge page
+    # (Cosmic Exploration: 30+ sections) can't fit whole, and document order
+    # would spend the whole budget on preamble while the asked-about section
+    # ("Mounts") sits at the bottom. Plural-insensitive word match, headings
+    # weighted; ties keep document order (sort is stable).
+    words = {w.rstrip("s") for w in re.findall(r"[a-z]{3,}", query.lower())}
+    def score(b: tuple[str, str]) -> int:
+        head = {w.rstrip("s") for w in re.findall(r"[a-z]{3,}", b[0].lower())}
+        body_hits = sum(1 for w in words if w and w in b[1].lower())
+        return 10 * len(words & head) + body_hits
+    ranked = sorted(blocks, key=score, reverse=True) if words else blocks
+
+    out: list[str] = []
+    dropped: list[str] = []
+    used = 0
+    for heading, block in ranked:
+        if used + len(block) > max_chars:
+            # Name what didn't fit: the model can re-query "<page> <section>"
+            # and relevance ranking will put that section first.
+            if heading and heading not in dropped:
+                dropped.append(heading)
+            continue
+        out.append(block)
+        used += len(block)
+    if dropped:
+        out.append("(lists truncated — the page also has sections: "
+                   + ", ".join(dropped[:15])
+                   + ". Search again as '<page title> <section name>' to read one.)")
     return "\n\n".join(out)
 
 
