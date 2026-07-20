@@ -10,10 +10,11 @@
 // stays at that edge on any monitor resolution.
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
-  armChips, ask as askAgent, fetchHistory, fetchWatches, plainText, removeWatch,
-  type Card, type CardPlace,
+  armChips, ask as askAgent, fetchHistory, fetchWatches, newChat, plainText,
+  removeWatch, type Card, type CardPlace,
 } from "./agent";
 import { api, type OverlayTimer, type OverlayWatch } from "../api";
+import Checklist from "./Checklist";
 import Drawer from "./Drawer";
 import "./overlay.css";
 
@@ -121,11 +122,16 @@ function useDraggable(id: string, def: Frac, enabled: boolean) {
   const ref = useRef<HTMLDivElement>(null);
   const [frac, setFrac] = useState<Frac>(() => loadLayout()[id] ?? def);
   const [px, setPx] = useState<{ x: number; y: number } | null>(null);
+  // While the pointer owns this widget, NOTHING else may position it. The
+  // re-place hooks below (resize, zoom-landed, the post-mount timers) were
+  // firing mid-drag and snapping it back to its stored fraction, which read
+  // as the widget jumping around under the cursor.
+  const dragging = useRef(false);
 
   useEffect(() => {
     const place = () => {
       const el = ref.current;
-      if (!el) return;
+      if (!el || dragging.current) return;
       const vp = viewport();
       const maxX = Math.max(0, vp.w - el.offsetWidth);
       const maxY = Math.max(0, vp.h - el.offsetHeight);
@@ -156,6 +162,8 @@ function useDraggable(id: string, def: Frac, enabled: boolean) {
     // preventDefault keeps focus where it is — dragging must not blur the
     // input (blur collapses the pill mid-drag).
     e.preventDefault();
+    e.stopPropagation();
+    dragging.current = true;
     // Deltas come from screenX/Y, which the webview's zoom ("Overlay size")
     // never touches, divided by the zoom WE set — clientX math drifted
     // down-right under zoom because rendered pixels and reported coordinates
@@ -179,6 +187,7 @@ function useDraggable(id: string, def: Frac, enabled: boolean) {
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
+      dragging.current = false;
       const f = {
         fx: maxX > 0 ? clamp(last.x / maxX, 0, 1) : 0,
         fy: maxY > 0 ? clamp(last.y / maxY, 0, 1) : 0,
@@ -197,6 +206,21 @@ function useDraggable(id: string, def: Frac, enabled: boolean) {
 }
 
 const SHOT_KEY = "ov-screenshot";
+// "Keep overlay surfaces open": stops the answer card decaying and stops a
+// click away from closing the pill/drawer. Set from the main app's Settings.
+const KEEP_KEY = "ov-keep-open";
+const readKeepOpen = () => localStorage.getItem(KEEP_KEY) === "1";
+
+// The ask group's size, dragged from its bottom-right grip and remembered.
+const SIZE_KEY = "ov-ask-size";
+const DEFAULT_SIZE = { w: 340, h: 190 };
+function readSize(): { w: number; h: number } {
+  try {
+    const v = JSON.parse(localStorage.getItem(SIZE_KEY) || "null");
+    if (v && typeof v.w === "number" && typeof v.h === "number") return v;
+  } catch { /* fall through */ }
+  return { ...DEFAULT_SIZE };
+}
 
 /** A crash anywhere in the overlay tree must NEVER brick the screen: the
  * window may hold cursor capture, and a dead React root would eat every
@@ -240,7 +264,64 @@ function Overlay() {
   // 📷 — include a screenshot of the game with each ask (screen awareness).
   // Default OFF: sending the screen is opt-in, per ask session.
   const [shot, setShot] = useState(() => localStorage.getItem(SHOT_KEY) === "1");
+  const [keepOpen, setKeepOpen] = useState(readKeepOpen);
+  const [size, setSize] = useState(readSize);
   const inputRef = useRef<HTMLInputElement>(null);
+  // Which surface the focus helpers should target. Both can be open at once
+  // with "keep overlay open", so the most recently summoned one wins.
+  const lastSummoned = useRef<"pill" | "drawer">("pill");
+
+  /** Drag the bottom-right grip to size the chat surface. Deltas come from
+   * screen coords over the zoom, same as the move drag, so the corner tracks
+   * the cursor at any overlay size. */
+  const onResize = (e: React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const zoom = cssZoom();
+    const sx = e.screenX;
+    const sy = e.screenY;
+    const start = readSize();
+    const move = (ev: PointerEvent) => {
+      setSize({
+        w: Math.round(clamp(start.w + (ev.screenX - sx) / zoom, 240, 900)),
+        h: Math.round(clamp(start.h + (ev.screenY - sy) / zoom, 0, 700)),
+      });
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      setSize((s) => {
+        localStorage.setItem(SIZE_KEY, JSON.stringify(s));
+        return s;
+      });
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  // Settings (main window) toggles this; mirror it live.
+  useEffect(() => {
+    const sync = () => setKeepOpen(readKeepOpen());
+    window.addEventListener("storage", sync);
+    let un: (() => void) | undefined;
+    if (IN_TAURI) {
+      import("@tauri-apps/api/event")
+        .then(({ listen }) => listen("overlay://keep-open", sync))
+        .then((u) => { un = u; });
+    }
+    return () => { window.removeEventListener("storage", sync); if (un) un(); };
+  }, []);
+
+  /** Clicking away with "keep open" on should hand the mouse back to the game
+   * WITHOUT tearing the surface down — that's the whole point of the setting.
+   * With it off, this is the normal close. */
+  const softDismiss = useCallback((close: () => void) => {
+    if (readKeepOpen()) {
+      void setCapture(false);
+      return;
+    }
+    close();
+  }, []);
 
   // Default ≈ the top-left dead zone above the chat log.
   const ask = useDraggable("ask", { fx: 0.005, fy: 0.07 }, expanded);
@@ -288,7 +369,10 @@ function Overlay() {
   // the keyboard while open, and closing either hands input back to the game.
   const [drawerOpen, setDrawerOpen] = useState(false);
   const expand = useCallback(() => {
-    setDrawerOpen(false);
+    // With "keep overlay open" the surfaces coexist — summoning the pill must
+    // not tear down the database drawer (and its search box) you were using.
+    if (!readKeepOpen()) setDrawerOpen(false);
+    lastSummoned.current = "pill";
     setExpanded(true);
     void setCapture(true);
   }, []);
@@ -297,7 +381,8 @@ function Overlay() {
     void setCapture(false);
   }, []);
   const openDrawer = useCallback(() => {
-    setExpanded(false);
+    if (!readKeepOpen()) setExpanded(false);
+    lastSummoned.current = "drawer";
     setDrawerOpen(true);
     void setCapture(true);
   }, []);
@@ -307,6 +392,9 @@ function Overlay() {
   }, []);
   // The drawer: draggable by its ✦ mark while open; lands centered-ish.
   const drawerDrag = useDraggable("drawer", { fx: 0.5, fy: 0.18 }, drawerOpen);
+  // The guide checklist: right rail, under where the quest list sits.
+  const checkDrag = useDraggable("checklist", { fx: 0.985, fy: 0.42 },
+                                 expanded || drawerOpen);
 
   useEffect(() => {
     // Auto-open the surface whose hotkey CREATED this window (?summon=1 /
@@ -341,7 +429,11 @@ function Overlay() {
   // Whichever summoned surface is open owns the keyboard — its input is the
   // focus target for all the fallbacks below.
   const activeInput = useCallback((): HTMLInputElement | null => {
-    if (drawerOpen) return document.querySelector<HTMLInputElement>(".ov-drawer-q");
+    const drawerQ = () => document.querySelector<HTMLInputElement>(".ov-drawer-q");
+    if (drawerOpen && expanded) {
+      return lastSummoned.current === "drawer" ? drawerQ() : inputRef.current;
+    }
+    if (drawerOpen) return drawerQ();
     if (expanded) return inputRef.current;
     return null;
   }, [drawerOpen, expanded]);
@@ -521,12 +613,13 @@ function Overlay() {
   };
 
   // A finished card decays after 20s — unless the pointer is on it (only
-  // possible while capture is on; in ambient state the timer just runs).
+  // possible while capture is on; in ambient state the timer just runs), or
+  // the player asked for surfaces to stay put.
   useEffect(() => {
-    if (!card?.done || hovered) return;
+    if (!card?.done || hovered || keepOpen) return;
     const t = window.setTimeout(() => setCard(null), 20000);
     return () => window.clearTimeout(t);
-  }, [card, hovered]);
+  }, [card, hovered, keepOpen]);
 
   // Card action: raise the main app on the pinned zone. preventDefault on
   // pointerdown keeps the input focused so the blur→collapse doesn't release
@@ -546,7 +639,10 @@ function Overlay() {
       {/* Click-away for the pill (same contract as the drawer's backdrop):
           clicking anywhere that isn't overlay UI collapses and returns the
           mouse to the game. */}
-      {expanded && <div className="ov-drawer-backdrop" onPointerDown={collapse} />}
+      {expanded && (
+        <div className="ov-drawer-backdrop"
+             onPointerDown={() => softDismiss(collapse)} />
+      )}
       <div className="ov-ask" ref={ask.ref} style={ask.style}>
         <div className={"ov-pill" + (expanded ? " open" : "")}>
           <span
@@ -569,6 +665,19 @@ function Overlay() {
                 placeholder="Ask Eorzea…  (Esc to close)"
                 onKeyDown={onKey}
               />
+              <button
+                className="ov-newchat"
+                onPointerDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  newChat();
+                  setCard(null);
+                  setHistory([]);
+                  inputRef.current?.focus();
+                }}
+                title="Start a new overlay chat (drops this thread's context)"
+              >
+                ✚
+              </button>
               <label
                 className={"ov-cam" + (shot ? " on" : "")}
                 onPointerDown={(e) => e.preventDefault()}
@@ -588,8 +697,9 @@ function Overlay() {
           )}
         </div>
 
-        {expanded && history.length > 0 && (
-          <div className="ov-history" ref={historyRef}>
+        {expanded && history.length > 0 && size.h > 0 && (
+          <div className="ov-history" ref={historyRef}
+               style={{ width: size.w, maxHeight: size.h }}>
             {history.map((m, i) => (
               <div key={i} className={"ov-hist-msg " + m.role}>
                 {plainText(m.content)}
@@ -601,6 +711,7 @@ function Overlay() {
         {card && (
           <div
             className="ov-card"
+            style={{ width: size.w }}
             onMouseEnter={() => setHovered(true)}
             onMouseLeave={() => setHovered(false)}
           >
@@ -647,16 +758,34 @@ function Overlay() {
             )}
           </div>
         )}
+
+        {/* Bottom-right grip: drag to size the chat surface (card + history).
+            Only while summoned — in ambient state nothing can reach it. */}
+        {expanded && (
+          <div
+            className="ov-resize"
+            onPointerDown={onResize}
+            title="Drag to resize"
+          />
+        )}
       </div>
 
       {drawerOpen && (
         <Drawer
           onClose={closeDrawer}
+          onClickAway={() => softDismiss(closeDrawer)}
           dragRef={drawerDrag.ref}
           dragStyle={drawerDrag.style}
           onDragStart={drawerDrag.onPointerDown}
         />
       )}
+
+      <Checklist
+        interactive={expanded || drawerOpen}
+        dragRef={checkDrag.ref}
+        dragStyle={checkDrag.style}
+        onDragStart={checkDrag.onPointerDown}
+      />
 
       {/* The chips rail: armed watches, ambient + click-through. While the
           pill is open (capture on) each chip is clickable (open in app) and

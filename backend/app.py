@@ -1117,6 +1117,14 @@ async def chat_endpoint(body: ChatBody):
             async for ev in run_chat(body.model, body.auth, convo, ctx):
                 if ev["type"] == "token":
                     answer_parts.append(ev["text"])
+                elif ev["type"] == "tool" and body.surface == "overlay":
+                    # Anything said before a tool call is the model thinking
+                    # out loud ("Let me try a different search:"). On the
+                    # overlay that preamble is noise — it ran together with
+                    # the answer on the card AND in the pill's history,
+                    # because the stored message kept every token. Drop it and
+                    # keep only what follows the last tool call.
+                    answer_parts.clear()
                 elif ev["type"] == "source" and ev.get("label"):
                     # Record cited sources on the chat (deduped) so the Sources tab is
                     # restored on reload instead of being lost with the runtime state.
@@ -1139,6 +1147,71 @@ async def chat_endpoint(body: ChatBody):
                         chars=len(text))
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+# ---------- Overlay checklist (the in-game guide widget) ----------
+class ChecklistPinBody(BaseModel):
+    chat_id: str
+    doc_id: str
+
+
+class ChecklistToggleBody(BaseModel):
+    index: int
+
+
+def _pinned_doc() -> tuple[dict, dict] | tuple[None, None]:
+    """(chat data, doc) for the doc pinned to the overlay, or (None, None)."""
+    import overlay_checklist
+    p = overlay_checklist.pinned()
+    if not p.get("chat_id") or not p.get("doc_id"):
+        return None, None
+    try:
+        data = _chat_json(p["chat_id"])
+    except Exception:
+        return None, None
+    doc = next((d for d in (data.get("docs") or []) if d.get("id") == p["doc_id"]), None)
+    return (data, doc) if doc else (None, None)
+
+
+@app.get("/overlay/checklist")
+def overlay_checklist_get():
+    import overlay_checklist
+    data, doc = _pinned_doc()
+    if not doc:
+        return {"pinned": False, "steps": []}
+    return {
+        "pinned": True,
+        "chat_id": data.get("id", ""),
+        "doc_id": doc.get("id", ""),
+        "title": (doc.get("title") or "").strip() or "Checklist",
+        "steps": overlay_checklist.steps(doc.get("content") or ""),
+    }
+
+
+@app.post("/overlay/checklist")
+def overlay_checklist_pin(body: ChecklistPinBody):
+    import overlay_checklist
+    return {"ok": True, "pinned": overlay_checklist.pin(body.chat_id, body.doc_id)}
+
+
+@app.delete("/overlay/checklist")
+def overlay_checklist_unpin():
+    import overlay_checklist
+    overlay_checklist.unpin()
+    return {"ok": True}
+
+
+@app.post("/overlay/checklist/toggle")
+def overlay_checklist_toggle(body: ChecklistToggleBody):
+    """Tick a step from the overlay — writes through to the doc itself, so the
+    app's editor and the in-game widget always show the same state."""
+    import overlay_checklist
+    data, doc = _pinned_doc()
+    if not doc:
+        raise HTTPException(404, "No doc is pinned to the overlay.")
+    doc["content"] = overlay_checklist.toggle(doc.get("content") or "", body.index)
+    _save_chat(data)
+    return {"ok": True, "steps": overlay_checklist.steps(doc["content"])}
 
 
 # ---------- In-app updates (GitHub Releases) ----------

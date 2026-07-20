@@ -89,7 +89,8 @@ td.addRule("taskListItems", {
 
 export default function Editor({
   docKey, markdown, chatId, title, shared, onChange, onTitleChange, onSharedChange,
-  onBlur, onSave, onImageClick, onAsk, askBusy, askStatus, thread, onClearThread,
+  onBlur, onSave, pinnedToOverlay, onPinToOverlay,
+  onImageClick, onAsk, askBusy, askStatus, thread, onClearThread,
 }: {
   docKey: string;                 // changes when the target doc/note changes
   markdown: string;
@@ -101,6 +102,8 @@ export default function Editor({
   onSharedChange?: (shared: boolean) => void;
   onBlur?: () => void;
   onSave?: () => void;            // explicit save (toolbar Save button)
+  pinnedToOverlay?: boolean;      // this doc's checklist shows on the overlay
+  onPinToOverlay?: () => void;
   onImageClick?: (assetName: string) => void;  // expand a map/portrait full-screen
   onAsk?: (instruction: string) => void;       // ask the agent about/edit THIS doc
   askBusy?: boolean;
@@ -273,6 +276,18 @@ export default function Editor({
             />
             Shared
           </label>
+        )}
+        {onPinToOverlay && (
+          <button
+            className={"tb-edit" + (pinnedToOverlay ? " on" : "")}
+            title={pinnedToOverlay
+              ? "Showing on the in-game overlay — click to stop"
+              : "Show this doc's checklist on the in-game overlay"}
+            onMouseDown={keep}
+            onClick={onPinToOverlay}
+          >
+            {pinnedToOverlay ? "✦ On overlay" : "✦ Overlay"}
+          </button>
         )}
         <button
           className={"tb-edit" + (editMode ? " on" : "")}

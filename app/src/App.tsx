@@ -744,6 +744,17 @@ export default function App() {
   // backend keep working; reopen from the tray icon. The Rust shell owns the
   // actual close behavior, so every change is pushed to it (set_close_to_tray).
   const [closeToTray, setCloseToTray] = useState<boolean>(false);
+  // "Keep overlay surfaces open" — the overlay window reads this from
+  // localStorage; the event is the live-update signal across windows.
+  const [overlayKeepOpen, setOverlayKeepOpen] = useState<boolean>(
+    () => localStorage.getItem("ov-keep-open") === "1");
+  useEffect(() => {
+    localStorage.setItem("ov-keep-open", overlayKeepOpen ? "1" : "0");
+    import("@tauri-apps/api/event")
+      .then(({ emit }) => emit("overlay://keep-open", overlayKeepOpen))
+      .catch(() => { /* plain-web dev */ });
+  }, [overlayKeepOpen]);
+
   // Updates: check GitHub on launch (on by default — being told a fix exists
   // is the point); installing without asking stays opt-in.
   const [autoCheckUpdates, setAutoCheckUpdates] = useState<boolean>(true);
@@ -1029,6 +1040,7 @@ export default function App() {
           if (typeof s.density === "string") setDensity(s.density);
           if (typeof s.refresh_profile_on_start === "boolean")
             setRefreshOnStart(s.refresh_profile_on_start);
+          if (typeof s.overlayKeepOpen === "boolean") setOverlayKeepOpen(s.overlayKeepOpen);
           if (typeof s.autoCheckUpdates === "boolean") setAutoCheckUpdates(s.autoCheckUpdates);
           if (typeof s.autoInstallUpdates === "boolean") setAutoInstallUpdates(s.autoInstallUpdates);
           if (typeof s.closeToTray === "boolean") {
@@ -1080,7 +1092,7 @@ export default function App() {
           theme, density, fontScale, overlayScale, activeWs, leftW, rightW, bottomH, dock,
           refresh_profile_on_start: refreshOnStart,
           closeToTray, overlayHotkeysV2: overlayHotkeys,
-          autoCheckUpdates, autoInstallUpdates,
+          autoCheckUpdates, autoInstallUpdates, overlayKeepOpen,
           defaultModel: model, defaultAuth: auth,
           splitView, splitW,
         })
@@ -1089,7 +1101,7 @@ export default function App() {
     return () => window.clearTimeout(t);
   }, [theme, density, fontScale, overlayScale, activeWs, leftW, rightW, bottomH, dock,
       refreshOnStart, closeToTray, overlayHotkeys, autoCheckUpdates, autoInstallUpdates,
-      model, auth, splitView, splitW]);
+      overlayKeepOpen, model, auth, splitView, splitW]);
 
   const dragTab = useRef<TabId | null>(null);
   const hgutter = useRef(false);
@@ -1449,6 +1461,8 @@ export default function App() {
   // running log of play-time questions, not something to mix into the list.
   const scopedChats = allScopedChats.filter((c) => c.surface !== "overlay");
   const overlayChats = allScopedChats.filter((c) => c.surface === "overlay");
+  // Collapsed by default; the choice sticks for the session.
+  const [overlayChatsOpen, setOverlayChatsOpen] = useState(false);
 
   function chatRow(c: ChatSummary) {
     return (
@@ -2202,6 +2216,27 @@ export default function App() {
     }));
     api.setAssetShared(chatId, name, shared).catch(() => {});
   }
+  // Which doc is showing on the in-game overlay's checklist widget ("" = none).
+  const [overlayDoc, setOverlayDoc] = useState("");
+  useEffect(() => {
+    api.checklistGet().then((c) => setOverlayDoc(c.pinned ? c.doc_id || "" : ""))
+      .catch(() => {});
+  }, []);
+  /** Pin this doc's checklist to the overlay, or unpin it if it's already the
+   *  pinned one. Only docs are pinnable — notes are private. */
+  async function pinDocToOverlay(kind: "docs" | "notes", id: string) {
+    if (kind !== "docs" || !chatId) return;
+    try {
+      if (overlayDoc === id) {
+        await api.checklistUnpin();
+        setOverlayDoc("");
+      } else {
+        await api.checklistPin(chatId, id);
+        setOverlayDoc(id);
+      }
+    } catch { /* backend away — leave the button as it was */ }
+  }
+
   function persistCards(kind: "docs" | "notes") {
     const items = (runtimes[chatId]?.[kind] as DocItem[]) || [];
     if (chatId) (kind === "docs" ? api.putDocs : api.putNotes)(chatId, items).catch(() => {});
@@ -2275,6 +2310,8 @@ export default function App() {
         onChange={(md) => setEditorContent(kind, ref.id, md)}
         onBlur={() => persistCards(kind)}
         onSave={() => saveEditorDoc(kind, ref.id)}
+        pinnedToOverlay={overlayDoc === ref.id}
+        onPinToOverlay={() => pinDocToOverlay(kind, ref.id)}
         onImageClick={(name) => { setLightbox(name); setLbZoom(false); }}
         onAsk={(instruction) => askDocEdit(kind, ref.id, instruction)}
         askBusy={docAsk.busy}
@@ -3260,11 +3297,24 @@ export default function App() {
             {scopedChats.length === 0 && <div className="muted small">No chats yet</div>}
             {scopedChats.map(chatRow)}
           </div>
+          {/* In-game overlay chats live at the BOTTOM, folded away — they're a
+              running log of play-time questions, not something to scroll past
+              to reach your real chats. */}
           {overlayChats.length > 0 && (
-            <>
-              <div className="recent-label">✦ Overlay</div>
-              <div className="chat-list">{overlayChats.map(chatRow)}</div>
-            </>
+            <div className="ov-section">
+              <button
+                className="ov-section-h"
+                onClick={() => setOverlayChatsOpen((o) => !o)}
+                title={overlayChatsOpen ? "Hide overlay chats" : "Show overlay chats"}
+              >
+                <span className="ov-section-arrow">{overlayChatsOpen ? "▾" : "▸"}</span>
+                ✦ Overlay
+                <span className="ov-section-count">{overlayChats.length}</span>
+              </button>
+              {overlayChatsOpen && (
+                <div className="chat-list">{overlayChats.map(chatRow)}</div>
+              )}
+            </div>
           )}
           <UsageMeter />
           {/* Plain anchors: the delegated link interceptor routes both into the
@@ -3448,6 +3498,8 @@ export default function App() {
           onAutoCheckUpdates={setAutoCheckUpdates}
           autoInstallUpdates={autoInstallUpdates}
           onAutoInstallUpdates={setAutoInstallUpdates}
+          overlayKeepOpen={overlayKeepOpen}
+          onOverlayKeepOpen={setOverlayKeepOpen}
           overlayHotkeys={overlayHotkeys}
           onOverlayHotkeys={applyOverlayHotkeys}
           models={models}
@@ -3926,6 +3978,8 @@ function Settings(props: {
   onAutoCheckUpdates: (on: boolean) => void;
   autoInstallUpdates: boolean;
   onAutoInstallUpdates: (on: boolean) => void;
+  overlayKeepOpen: boolean;
+  onOverlayKeepOpen: (on: boolean) => void;
   overlayHotkeys: OverlayHotkeySet;
   // Applies + persists; resolves to "" on success or a bind error to show.
   onOverlayHotkeys: (s: OverlayHotkeySet) => Promise<string>;
@@ -4153,6 +4207,22 @@ function Settings(props: {
         />
 
         <div className="section-label">Background &amp; overlay</div>
+        <label className="toggle-row">
+          <input
+            type="checkbox"
+            checked={props.overlayKeepOpen}
+            onChange={(e) => props.onOverlayKeepOpen(e.target.checked)}
+          />
+          <span className="toggle-text">
+            <span className="toggle-name">Keep overlay surfaces open</span>
+            <span className="toggle-hint">
+              Answer cards stop fading out on their own, and clicking away no
+              longer closes the Ask pill or the database drawer — it just hands
+              the mouse back to the game, leaving them on screen. Esc and the
+              kill switch still close them.
+            </span>
+          </span>
+        </label>
         <OverlayWatchList />
         <label className="toggle-row">
           <input

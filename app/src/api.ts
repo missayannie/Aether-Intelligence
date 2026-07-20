@@ -193,6 +193,13 @@ export type OverlayWatch = {
   created_at?: string;
 };
 
+// The guide checklist shown on the overlay (docs/overlay-spec.md concept 2).
+export type ChecklistStep = { index: number; text: string; done: boolean };
+export type OverlayChecklist = {
+  pinned: boolean; chat_id?: string; doc_id?: string; title?: string;
+  steps: ChecklistStep[];
+};
+
 // In-app updates, read from the project's GitHub Releases.
 export type UpdateInfo = {
   found: boolean; current: string; newer?: boolean;
@@ -404,6 +411,18 @@ export const api = {
   listChats: () => j<{ chats: ChatSummary[] }>("/chats"),
   // Overlay watches — the passive chips' data (pins/pinsets armed from answer
   // cards or the app; docs/overlay-spec.md §6.3).
+  // The overlay's guide checklist: one doc pinned to the in-game widget.
+  checklistGet: () => j<OverlayChecklist>("/overlay/checklist"),
+  checklistPin: (chat_id: string, doc_id: string) =>
+    j<{ ok: boolean }>("/overlay/checklist", {
+      method: "POST", body: JSON.stringify({ chat_id, doc_id }),
+    }),
+  checklistUnpin: () => j<{ ok: boolean }>("/overlay/checklist", { method: "DELETE" }),
+  checklistToggle: (index: number) =>
+    j<{ ok: boolean; steps: ChecklistStep[] }>("/overlay/checklist/toggle", {
+      method: "POST", body: JSON.stringify({ index }),
+    }),
+
   // In-app updates, from the project's GitHub Releases.
   updateCheck: (current: string) =>
     j<UpdateInfo>(`/update/check?current=${encodeURIComponent(current)}`),
