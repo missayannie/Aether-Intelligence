@@ -72,7 +72,10 @@ html.overlay-window #root {
   border: none;
   outline: none;
   color: #e8ecf6;
-  width: 280px;
+  /* Flexes with the pill (which follows the chat window's width) instead of a
+     fixed 280px, so narrowing the window narrows the whole ask bar. */
+  flex: 1;
+  min-width: 0;
   font-size: 14px;
   font-family: inherit;
 }
