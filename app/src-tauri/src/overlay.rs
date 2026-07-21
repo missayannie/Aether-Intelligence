@@ -285,6 +285,11 @@ pub fn toggle(app: &AppHandle) {
         let _ = w.set_ignore_cursor_events(true);
         #[cfg(windows)]
         restore_foreground();
+        // A hide is an exit: tear the surfaces down (both channels, like the
+        // summons) so the next single hotkey reopens ONLY what it names, rather
+        // than resurrecting whatever was open when it was hidden.
+        let _ = app.emit("overlay://reset", ());
+        let _ = w.eval("window.__aetherOverlayReset && window.__aetherOverlayReset()");
         let _ = w.hide();
     } else {
         let _ = w.show();
@@ -314,7 +319,7 @@ pub async fn overlay_open_map(app: AppHandle, payload: serde_json::Value) -> Res
 /// duration of SetForegroundWindow, so the request comes "from" the thread
 /// that owns the foreground.
 #[cfg(windows)]
-fn force_foreground(w: &WebviewWindow) {
+fn force_foreground(w: &WebviewWindow, synth_alt: bool) {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
     use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -331,18 +336,29 @@ fn force_foreground(w: &WebviewWindow) {
             let _ = SetForegroundWindow(hwnd);
             return;
         }
-        // Two classic remedies at once, because a game holding the foreground
-        // lock defeats either alone on some setups:
+        // Two classic remedies, because a game holding the foreground lock
+        // defeats either alone on some setups:
         // 1. attach our input queue to the foreground thread,
         // 2. a synthetic ALT press — a window processing "user input" is
-        //    allowed to take the foreground (ALT is physically held during
-        //    the Alt+` hotkey anyway, so this is a no-op for the player).
+        //    allowed to take the foreground.
+        //
+        // The synthetic ALT is ONLY safe on the immediate attempt, when the
+        // Alt+` hotkey has literally just fired and ALT is still physically
+        // held. The delayed retries run 120-300ms later, by which time the
+        // player has often released ALT and started typing — injecting an ALT
+        // DOWN then turns their next keystrokes into Alt-combos (menu
+        // accelerators), which reads as "I can't type after summoning". So
+        // retries take the foreground WITHOUT touching the keyboard.
         let fg_thread = GetWindowThreadProcessId(fg, None);
         let cur = GetCurrentThreadId();
         let attached = AttachThreadInput(cur, fg_thread, true);
-        keybd_event(VK_MENU.0 as u8, 0, KEYBD_EVENT_FLAGS(0), 0);
+        if synth_alt {
+            keybd_event(VK_MENU.0 as u8, 0, KEYBD_EVENT_FLAGS(0), 0);
+        }
         let _ = SetForegroundWindow(hwnd);
-        keybd_event(VK_MENU.0 as u8, 0, KEYEVENTF_KEYUP, 0);
+        if synth_alt {
+            keybd_event(VK_MENU.0 as u8, 0, KEYEVENTF_KEYUP, 0);
+        }
         if attached.as_bool() {
             let _ = AttachThreadInput(cur, fg_thread, false);
         }
@@ -414,9 +430,10 @@ pub async fn overlay_set_capture(app: AppHandle, capture: bool) -> Result<(), St
         w.show().map_err(crate::err_str)?;
         w.set_focus().map_err(crate::err_str)?;
         #[cfg(windows)]
-        force_foreground(&w);
+        force_foreground(&w, true); // ALT still physically held — safe to use it
         // The game can snatch focus back within the first frames — retry
-        // twice on a short fuse so "summon, then just type" holds.
+        // twice on a short fuse so "summon, then just type" holds. These run
+        // AFTER ALT may have been released, so they never synthesize ALT.
         #[cfg(windows)]
         {
             let w2 = w.clone();
@@ -424,7 +441,7 @@ pub async fn overlay_set_capture(app: AppHandle, capture: bool) -> Result<(), St
                 for delay in [120u64, 300] {
                     std::thread::sleep(std::time::Duration::from_millis(delay));
                     let _ = w2.set_focus();
-                    force_foreground(&w2);
+                    force_foreground(&w2, false);
                 }
             });
         }

@@ -401,6 +401,15 @@ function Overlay() {
     setDrawerOpen(false);
     void setCapture(false);
   }, []);
+  // Full teardown, fired by the kill switch (Alt+\) when it hides the window.
+  // Without this the surfaces' open state survives the hide, so with "keep
+  // overlay open" on, the next single summon reappears WITH whatever was open
+  // before — you press Alt+` and both the pill and the drawer come back. A
+  // hide is meant to be an exit, so the next summon should start from nothing.
+  const reset = useCallback(() => {
+    setExpanded(false);
+    setDrawerOpen(false);
+  }, []);
   // The drawer: draggable by its ✦ mark while open; lands centered-ish.
   const drawerDrag = useDraggable("drawer", { fx: 0.5, fy: 0.18 }, drawerOpen);
   // The guide checklist: right rail, under where the quest list sits.
@@ -419,19 +428,22 @@ function Overlay() {
     const w = window as unknown as Record<string, unknown>;
     w.__aetherOverlaySummon = expand;
     w.__aetherOverlayDrawer = openDrawer;
+    w.__aetherOverlayReset = reset;
     const unlistens: (() => void)[] = [];
     if (IN_TAURI) {
       import("@tauri-apps/api/event").then(({ listen }) => {
         void listen("overlay://summon-ask", () => expand()).then((u) => unlistens.push(u));
         void listen("overlay://summon-drawer", () => openDrawer()).then((u) => unlistens.push(u));
+        void listen("overlay://reset", () => reset()).then((u) => unlistens.push(u));
       });
     }
     return () => {
       delete w.__aetherOverlaySummon;
       delete w.__aetherOverlayDrawer;
+      delete w.__aetherOverlayReset;
       unlistens.forEach((u) => u());
     };
-  }, [expand, openDrawer]);
+  }, [expand, openDrawer, reset]);
 
   // Whichever summoned surface is open owns the keyboard — its input is the
   // focus target for all the fallbacks below.
