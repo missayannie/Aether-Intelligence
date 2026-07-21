@@ -614,6 +614,19 @@ function Overlay() {
     ...(liveQ ? [{ role: "user", content: liveQ }] : []),
     ...(card?.text ? [{ role: "assistant", content: card.text }] : []),
   ];
+  // Newest exchange FIRST, sitting right under the pill. We reverse by TURN,
+  // not message: a turn starts at each user message and keeps its answer under
+  // it, so each exchange still reads question → answer — only the turns are
+  // ordered newest → oldest. (A flat reverse would put every answer above its
+  // own question.)
+  const orderedMsgs = (() => {
+    const turns: { role: string; content: string }[][] = [];
+    for (const m of [...history, ...liveTurn]) {
+      if (m.role === "user" || turns.length === 0) turns.push([m]);
+      else turns[turns.length - 1].push(m);
+    }
+    return turns.reverse().flat();
+  })();
   useEffect(() => {
     if (!expanded) return;
     void fetchHistory().then((h) => {
@@ -626,7 +639,9 @@ function Overlay() {
     });
   }, [expanded, card?.done]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
-    historyRef.current?.scrollTo(0, historyRef.current.scrollHeight);
+    // Newest turn is at the TOP now, so keep the box pinned there (not the
+    // bottom) as the answer streams in.
+    historyRef.current?.scrollTo(0, 0);
   }, [history, card?.text]);
 
   // Widget scale: apply on mount, then re-apply when Settings changes it —
@@ -811,14 +826,8 @@ function Overlay() {
                style={{ width: size.w, maxHeight: size.h, minHeight: keepOpen ? 60 : undefined }}
                onMouseEnter={() => setHovered(true)}
                onMouseLeave={() => setHovered(false)}>
-            {[...history, ...liveTurn].map((m, i) => (
-              <div key={i} className={"ov-hist-msg " + m.role}>
-                {plainText(m.content)}
-              </div>
-            ))}
-            {!history.length && !liveTurn.length && (
-              <div className="ov-hist-empty">Ask something — answers land here.</div>
-            )}
+            {/* Status/error live with the newest turn, which is now at the
+                TOP — so they render above the messages, not below. */}
             {card?.status && (
               <div className="ov-card-status">
                 <span className="ov-spin" />
@@ -826,6 +835,14 @@ function Overlay() {
               </div>
             )}
             {card?.error && <div className="ov-card-err">{card.error}</div>}
+            {orderedMsgs.map((m, i) => (
+              <div key={i} className={"ov-hist-msg " + m.role}>
+                {plainText(m.content)}
+              </div>
+            ))}
+            {!history.length && !liveTurn.length && (
+              <div className="ov-hist-empty">Ask something — answers land here.</div>
+            )}
           </div>
         )}
 
