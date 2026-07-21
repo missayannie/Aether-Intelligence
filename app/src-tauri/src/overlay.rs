@@ -125,8 +125,25 @@ fn ensure_window(app: &AppHandle, boot: &str) -> Result<(WebviewWindow, bool), S
             let _ = SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
         }
     }
-    w.show().map_err(crate::err_str)?;
+    // NOTE: intentionally left HIDDEN. Every summon caller shows it right after
+    // (so this is the same as before for them), while prewarm() relies on it
+    // staying hidden — the window loads its page in the background so the first
+    // real summon is a warm one, not a cold create that races its own focus.
     Ok((w, true))
+}
+
+/// Create the overlay window ahead of time, hidden, so its page is already
+/// loaded when the player first hits the hotkey. A cold create races window
+/// show, cursor-capture, and layout settling and loses the focus grab; a warm
+/// window doesn't. Cheap insurance: one hidden, click-through, capture-excluded
+/// webview. Called once at startup and again if it ever goes missing.
+pub fn prewarm(app: &AppHandle) {
+    if app.get_webview_window(OVERLAY_LABEL).is_some() {
+        return;
+    }
+    if let Err(e) = ensure_window(app, "") {
+        eprintln!("[overlay] prewarm failed: {e}");
+    }
 }
 
 /// Screen awareness (§6.5): one JPEG data-URL of the primary monitor, sized
@@ -238,6 +255,11 @@ pub fn summon_ask(app: &AppHandle) {
     match ensure_window(app, "summon=1") {
         Ok((w, created)) => {
             let _ = w.show();
+            // Seize keyboard focus NOW, while we're still allowed to and ALT is
+            // held — the frontend's click fallback can't be counted on to do it
+            // late over the game.
+            #[cfg(windows)]
+            grab_keyboard_focus(&w);
             let _ = app.emit("overlay://summon-ask", ());
             let _ = w.eval("window.__aetherOverlaySummon && window.__aetherOverlaySummon()");
             // A late retry ONLY when this call created the window (its page
@@ -268,6 +290,8 @@ pub fn summon_drawer(app: &AppHandle) {
     match ensure_window(app, "drawer=1") {
         Ok((w, created)) => {
             let _ = w.show();
+            #[cfg(windows)]
+            grab_keyboard_focus(&w);
             let _ = app.emit("overlay://summon-drawer", ());
             let _ = w.eval("window.__aetherOverlayDrawer && window.__aetherOverlayDrawer()");
             if created {
@@ -431,6 +455,24 @@ fn force_foreground(w: &WebviewWindow, synth_alt: bool) {
     }
 }
 
+/// Grab OS keyboard focus for the overlay RIGHT NOW, synchronously, from the
+/// hotkey handler. This is the one moment Windows reliably lets us: our
+/// process just received the WM_HOTKEY (so it's the "last input" owner allowed
+/// to SetForegroundWindow) and ALT is still physically held (so the synthetic
+/// ALT path is valid). Doing it here — rather than waiting for the webview to
+/// mount and call overlay_set_capture over IPC hundreds of ms later — is what
+/// fixes both the cold first summon and the "pill's been open a while, the
+/// game quietly took focus back" case. Deliberately does NOT touch
+/// ignore_cursor_events: capture (and the click fallback) stay the frontend's
+/// job, so we never freeze clicks before the surface has even rendered.
+#[cfg(windows)]
+fn grab_keyboard_focus(w: &WebviewWindow) {
+    let _ = w.set_focus();
+    force_foreground(w, true);
+}
+#[cfg(not(windows))]
+fn grab_keyboard_focus(_w: &WebviewWindow) {}
+
 /// LAST-RESORT focus: synthesize a real mouse click at the given PHYSICAL
 /// screen coordinates — the centre of the pill's input — then put the cursor
 /// back where it was. "I have to click in the text box" is the one action
@@ -495,8 +537,12 @@ pub async fn overlay_set_capture(app: AppHandle, capture: bool) -> Result<(), St
         w.set_ignore_cursor_events(false).map_err(crate::err_str)?;
         w.show().map_err(crate::err_str)?;
         w.set_focus().map_err(crate::err_str)?;
+        // No synthetic ALT here: this runs over IPC after the webview mounts,
+        // by which point ALT may be released and injecting it would corrupt
+        // the player's typing. The synchronous grab in the hotkey handler
+        // (grab_keyboard_focus) owns the ALT-held moment; this is just backup.
         #[cfg(windows)]
-        force_foreground(&w, true); // ALT still physically held — safe to use it
+        force_foreground(&w, false);
         // The game can snatch focus back within the first frames — retry
         // twice on a short fuse so "summon, then just type" holds. These run
         // AFTER ALT may have been released, so they never synthesize ALT.

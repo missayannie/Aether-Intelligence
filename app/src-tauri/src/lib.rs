@@ -525,6 +525,12 @@ pub fn run() {
             // game (overlay::may_summon); this covers the other direction.
             overlay::start_ffxiv_watcher(app.handle());
 
+            // Build the overlay window now (hidden) so the FIRST hotkey lands
+            // on a warm window instead of racing a cold create — the fix for
+            // "the first summon won't let me type". It stays hidden and
+            // click-through until actually summoned.
+            overlay::prewarm(app.handle());
+
             // System tray: always present, so the app is reachable while the
             // main window is hidden (the "keep running in background" setting)
             // and killable if anything ever wedges.

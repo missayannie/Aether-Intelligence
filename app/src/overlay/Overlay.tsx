@@ -561,14 +561,23 @@ function Overlay() {
     //   2. retry until the input actually holds focus (capped ~1.4s), instead
     //      of two fixed-time shots that both fire before the window is ready.
     // It stops the instant focus lands, so a warm summon still takes one pass.
+    // "Done" means the OS WINDOW holds keyboard focus AND our input is the
+    // active element. document.activeElement alone is a trap: DOM focus is
+    // sticky, so after the game quietly takes OS focus back (pill left open a
+    // while), activeElement is still the input — the old check thought it was
+    // focused and never clicked to reclaim it. document.hasFocus() is what
+    // actually tracks the OS window, so we keep clicking until BOTH hold.
+    const focused = () => {
+      const inp = activeInput();
+      return !!inp && document.hasFocus() && document.activeElement === inp;
+    };
     let timer: number | undefined;
     void (async () => {
       await setCapture(true);
       for (let i = 0; i < 12 && !cancelled; i++) {
-        const inp = activeInput();
-        if (inp && document.activeElement === inp) return; // focused — done
+        if (focused()) return;
         await clickInput();
-        if (cancelled) return;
+        if (cancelled || focused()) return;
         await new Promise((res) => { timer = window.setTimeout(res, 120); });
       }
     })();
