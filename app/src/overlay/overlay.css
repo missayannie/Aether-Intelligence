@@ -52,6 +52,9 @@ html.overlay-window #root {
 }
 .ov-pill.open {
   padding-right: 14px;
+  /* More opaque once it's the active Ask bar — readable over a busy game
+     scene. The collapsed dot stays lighter (see .ov-pill above). */
+  background: rgba(13, 20, 36, 0.93);
 }
 .ov-mark {
   color: #e6c060;
@@ -101,7 +104,7 @@ html.overlay-window #root {
   left: calc(50% - 240px);
   width: 480px;
   max-width: 90vw;
-  background: rgba(13, 20, 36, 0.92);
+  background: rgba(13, 20, 36, 0.96);
   border: 1px solid rgba(230, 192, 96, 0.4);
   border-radius: 12px;
   padding: 10px 12px;
@@ -304,7 +307,7 @@ html.overlay-window #root {
   flex-direction: column;
   gap: 6px;
   padding: 8px 10px;
-  background: rgba(13, 20, 36, 0.72);
+  background: rgba(13, 20, 36, 0.93);
   border: 1px solid #2a3552;
   border-radius: 10px;
   backdrop-filter: blur(6px);
@@ -333,7 +336,7 @@ html.overlay-window #root {
 }
 /* Actions for the newest answer, directly under the conversation. */
 .ov-answer-foot {
-  background: rgba(13, 20, 36, 0.78);
+  background: rgba(13, 20, 36, 0.93);
   border: 1px solid #2a3552;
   border-left: 3px solid #e6c060;
   border-radius: 10px;
@@ -554,7 +557,7 @@ html.overlay-window #root {
 /* --- Answer card: slides in under the pill, decays ---------------------- */
 .ov-card {
   width: 320px;
-  background: rgba(13, 20, 36, 0.85);
+  background: rgba(13, 20, 36, 0.94);
   border: 1px solid #2a3552;
   border-left: 3px solid #e6c060;
   border-radius: 10px;
@@ -681,6 +684,7 @@ html.overlay-window #root {
   padding: 7px 9px;
   backdrop-filter: blur(6px);
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
+  transition: background 120ms ease;
 }
 .ov-check.arrange {
   border-color: rgba(230, 192, 96, 0.45);
@@ -792,6 +796,18 @@ html.overlay-window #root {
   color: #9aa7c0;
   font-variant-numeric: tabular-nums;
   backdrop-filter: blur(6px);
+  transition: background 120ms ease;
+}
+/* When the overlay is active (a surface is summoned), the ambient widgets —
+   the chips rail and the guide checklist — go more opaque so they read
+   clearly over the game. Left translucent otherwise, so idle chips stay
+   unobtrusive. */
+.ov-root.active .ov-chip {
+  background: rgba(13, 20, 36, 0.95);
+  color: #c6cfdf;
+}
+.ov-root.active .ov-check {
+  background: rgba(13, 20, 36, 0.95);
 }
 .ov-chip-label {
   white-space: nowrap;

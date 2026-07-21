@@ -734,7 +734,7 @@ function Overlay() {
   };
 
   return (
-    <div className="ov-root">
+    <div className={"ov-root" + (expanded || drawerOpen ? " active" : "")}>
       {/* Click-away for the pill (same contract as the drawer's backdrop):
           clicking anywhere that isn't overlay UI collapses and returns the
           mouse to the game. */}
