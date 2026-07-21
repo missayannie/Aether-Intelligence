@@ -550,21 +550,31 @@ function Overlay() {
       }
     };
 
-    // Once the surface has laid out, then once more in case the game clawed
-    // focus back during those first frames.
-    // Fire straight away too: when the surface is already open (stay-open
-    // mode) there are no first frames to wait for, so the immediate pass is
-    // what actually lands focus; the timed ones cover the just-opened case.
-    void clickInput();
-    const t1 = window.setTimeout(clickInput, 130);
-    const t2 = window.setTimeout(() => {
-      const inp = activeInput();
-      if (inp && document.activeElement !== inp) void clickInput();
-    }, 650);
+    // The FIRST summon of a session is the hard one: it CREATES the window, so
+    // the click/focus attempts race window show, cursor-capture taking effect,
+    // and the zoom/layout settling — the click lands on nothing and the player
+    // has to click the box by hand. Every later summon reuses the warm window
+    // and lands focus on the first try. Two things fix the cold case:
+    //   1. await setCapture(true) so ignore_cursor_events is definitely OFF
+    //      before we click — otherwise the synthetic click falls through to
+    //      the game instead of our input.
+    //   2. retry until the input actually holds focus (capped ~1.4s), instead
+    //      of two fixed-time shots that both fire before the window is ready.
+    // It stops the instant focus lands, so a warm summon still takes one pass.
+    let timer: number | undefined;
+    void (async () => {
+      await setCapture(true);
+      for (let i = 0; i < 12 && !cancelled; i++) {
+        const inp = activeInput();
+        if (inp && document.activeElement === inp) return; // focused — done
+        await clickInput();
+        if (cancelled) return;
+        await new Promise((res) => { timer = window.setTimeout(res, 120); });
+      }
+    })();
     return () => {
       cancelled = true;
-      window.clearTimeout(t1);
-      window.clearTimeout(t2);
+      window.clearTimeout(timer);
     };
   }, [expanded, drawerOpen, activeInput, summonTick]);
 
