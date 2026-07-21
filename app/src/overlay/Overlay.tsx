@@ -490,20 +490,36 @@ function Overlay() {
     };
   }, [expanded, drawerOpen]);
 
-  // ESCAPE HATCH: Esc closes every summoned surface and releases capture even
-  // when focus is lost (capture phase, window level). When one of OUR inputs
-  // has focus, its own Esc handling wins (drawer: detail → list → close).
+  // ESCAPE HATCH: Esc closes the summoned surface, at the WINDOW CAPTURE phase.
+  // The pill needed two presses to close because the webview's native handling
+  // of Escape blurs the focused input, swallowing the first keydown before the
+  // input's own onKey (collapse) could run; only the second press, with focus
+  // no longer in the input, reached a closer. Handling it here — capture phase,
+  // before any native input handling — closes the pill on the FIRST press,
+  // wherever focus sits.
   useEffect(() => {
     const esc = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
-      if (document.activeElement?.tagName === "INPUT") return;
-      setDrawerOpen(false);
-      setExpanded(false);
-      void setCapture(false);
+      // When the drawer is the active surface, let ITS handler run (it walks
+      // detail → list → close) while its search box has focus; only close from
+      // here when focus is elsewhere.
+      const drawerActive = drawerOpen && (!expanded || lastSummoned.current === "drawer");
+      if (drawerActive) {
+        if (document.activeElement?.tagName === "INPUT") return;
+        e.preventDefault();
+        e.stopPropagation();
+        closeDrawer();
+        return;
+      }
+      if (expanded) {
+        e.preventDefault();
+        e.stopPropagation();
+        collapse();
+      }
     };
     window.addEventListener("keydown", esc, true);
     return () => window.removeEventListener("keydown", esc, true);
-  }, []);
+  }, [expanded, drawerOpen, collapse, closeDrawer]);
 
   // Belt-and-suspenders for focus: while a surface is open, ANY keystroke
   // that lands on the window but not in its input (focus theft, a click that
