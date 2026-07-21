@@ -371,12 +371,19 @@ function Overlay() {
   // The two SUMMONED surfaces (pill, drawer) are mutually exclusive; both own
   // the keyboard while open, and closing either hands input back to the game.
   const [drawerOpen, setDrawerOpen] = useState(false);
+  // Bumped on EVERY summon, even one that doesn't change open state. In
+  // stay-open mode the surface is already up, so setExpanded(true) is a no-op
+  // and the focus effect below would never re-fire — this gives it something
+  // that always changes, so "press the hotkey, start typing" works whether the
+  // surface was closed or already sitting there.
+  const [summonTick, setSummonTick] = useState(0);
   const expand = useCallback(() => {
     // With "keep overlay open" the surfaces coexist — summoning the pill must
     // not tear down the database drawer (and its search box) you were using.
     if (!readKeepOpen()) setDrawerOpen(false);
     lastSummoned.current = "pill";
     setExpanded(true);
+    setSummonTick((n) => n + 1);
     void setCapture(true);
   }, []);
   const collapse = useCallback(() => {
@@ -387,6 +394,7 @@ function Overlay() {
     if (!readKeepOpen()) setExpanded(false);
     lastSummoned.current = "drawer";
     setDrawerOpen(true);
+    setSummonTick((n) => n + 1);
     void setCapture(true);
   }, []);
   const closeDrawer = useCallback(() => {
@@ -425,10 +433,6 @@ function Overlay() {
     };
   }, [expand, openDrawer]);
 
-  useEffect(() => {
-    if (expanded) inputRef.current?.focus();
-  }, [expanded]);
-
   // Whichever summoned surface is open owns the keyboard — its input is the
   // focus target for all the fallbacks below.
   const activeInput = useCallback((): HTMLInputElement | null => {
@@ -440,6 +444,14 @@ function Overlay() {
     if (expanded) return inputRef.current;
     return null;
   }, [drawerOpen, expanded]);
+
+  // Plain-JS focus on every summon (not just when `expanded` flips) — this is
+  // what focuses the input in web dev, and inside Tauri it's a cheap first
+  // attempt before the shell-click fallback below does the guaranteed thing.
+  useEffect(() => {
+    if (!expanded && !drawerOpen) return;
+    activeInput()?.focus();
+  }, [expanded, drawerOpen, activeInput, summonTick]);
 
   // Losing focus must NEVER close a summoned surface. Over a game the overlay
   // routinely can't hold OS focus — an earlier build closed the pill on
@@ -528,6 +540,10 @@ function Overlay() {
 
     // Once the surface has laid out, then once more in case the game clawed
     // focus back during those first frames.
+    // Fire straight away too: when the surface is already open (stay-open
+    // mode) there are no first frames to wait for, so the immediate pass is
+    // what actually lands focus; the timed ones cover the just-opened case.
+    void clickInput();
     const t1 = window.setTimeout(clickInput, 130);
     const t2 = window.setTimeout(() => {
       const inp = activeInput();
@@ -538,7 +554,7 @@ function Overlay() {
       window.clearTimeout(t1);
       window.clearTimeout(t2);
     };
-  }, [expanded, drawerOpen, activeInput]);
+  }, [expanded, drawerOpen, activeInput, summonTick]);
 
   // Previous turns under the pill — refreshed on each summon, and again when
   // a streaming answer finishes so the newest exchange shows up.
