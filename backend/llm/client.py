@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 from typing import AsyncIterator
 
 import litellm
@@ -25,6 +26,15 @@ from keys import vault
 # PER QUEST, and prompt caching makes the extra rounds cheap. Hitting the cap
 # now logs where the budget went (looplog) instead of dying silently.
 MAX_ROUNDS = 24
+
+# The in-game Ask pill is a glance, not a research session. It gets a tighter
+# leash than the main app so it can never sit "Researching…" for minutes while
+# the model flails on a question it can't crack: a small round budget AND a
+# wall-clock deadline, whichever trips first. On either, the loop falls through
+# to the same forced-final-answer path the main app uses when its budget runs
+# out — so the player gets a direct, caveated reply fast instead of a hang.
+OVERLAY_MAX_ROUNDS = 6
+OVERLAY_DEADLINE_S = 40.0
 
 # GPT-5-family models reject temperature != 1 with a hard 400; litellm knows
 # which params each model supports, so let it drop the unsupported ones.
@@ -183,6 +193,9 @@ async def _chat_inner(model_id: str, messages: list[dict], ctx: dict | None,
     seen_sources: set[str] = set()
     from llm import looplog
     chat_id = (ctx or {}).get("chat_id", "")
+    overlay = (ctx or {}).get("surface", "") == "overlay"
+    max_rounds = OVERLAY_MAX_ROUNDS if overlay else MAX_ROUNDS
+    deadline = time.monotonic() + OVERLAY_DEADLINE_S if overlay else None
     rounds = 0
 
     # Prompt caching, Anthropic only. Anthropic bills cache writes at 1.25x and
@@ -194,7 +207,13 @@ async def _chat_inner(model_id: str, messages: list[dict], ctx: dict | None,
     if cache_prompts:
         _mark_system_cache(convo)
 
-    for _ in range(MAX_ROUNDS):
+    for _ in range(max_rounds):
+        # Overlay wall-clock guard: stop starting new tool rounds once the
+        # deadline passes and go straight to writing up what we have. Checked
+        # at the TOP so an in-flight round always finishes cleanly.
+        if deadline is not None and time.monotonic() > deadline:
+            looplog.log(chat_id, "api", "overlay-deadline", n=rounds)
+            break
         rounds += 1
         looplog.log(chat_id, "api", "round", n=rounds, msgs=len(convo))
         if cache_prompts:
@@ -323,7 +342,7 @@ async def _chat_inner(model_id: str, messages: list[dict], ctx: dict | None,
     # tool results = real tokens spent): force one final completion with tools
     # withheld, so the model writes up whatever it has gathered. A partial,
     # caveated answer beats "Reached tool-call limit" every time.
-    looplog.log(chat_id, "api", "error", detail=f"hit MAX_ROUNDS={MAX_ROUNDS}")
+    looplog.log(chat_id, "api", "error", detail=f"budget spent (cap={max_rounds}, overlay={overlay})")
     convo.append({
         "role": "user",
         "content": ("[system] Tool budget exhausted — no more tool calls are "

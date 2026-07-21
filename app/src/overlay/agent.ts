@@ -166,6 +166,20 @@ export async function ask(q: string, onUpdate: (c: Card) => void,
   card.done = true;
   card.status = "";
   push();
+  // Tell the main window its chat list is stale — a brand-new overlay chat (or
+  // new turns in the rolling one) won't show in the sidebar otherwise, since
+  // the app only refetches on its own actions, not when THIS window writes.
+  void notifyChatsChanged();
+}
+
+/** Broadcast that the overlay touched the chat store, so the main window can
+ * refresh its sidebar. App-wide emit (not emit_to) so a global listen() hears
+ * it; a no-op in plain-web dev. */
+async function notifyChatsChanged(): Promise<void> {
+  try {
+    const { emit } = await import("@tauri-apps/api/event");
+    await emit("overlay://chats-changed");
+  } catch { /* not in Tauri */ }
 }
 
 /** The overlay chat's recent turns, for the history box under the pill.

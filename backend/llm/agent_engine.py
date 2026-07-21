@@ -416,6 +416,11 @@ async def chat(model_id: str, messages: list[dict], ctx: dict | None = None) -> 
     }
     stderr_buf: list[str] = []  # capture the CLI's stderr to diagnose init failures
 
+    # The in-game Ask pill gets a tighter leash than the main app (mirrors the
+    # API engine): fewer turns AND a wall-clock deadline below, so it can't sit
+    # "Researching…" for minutes on a question it can't crack.
+    overlay = (ctx or {}).get("surface", "") == "overlay"
+
     options = ClaudeAgentOptions(
         system_prompt=({"type": "file", "path": sp_path} if sp_path else system),
         mcp_servers={"ffxiv": server},
@@ -454,8 +459,9 @@ async def chat(model_id: str, messages: list[dict], ctx: dict | None = None) -> 
         setting_sources=[],  # don't inherit the user's Claude Code project/settings
         # 48, not 16: bulk requests ("pin every quest in the relic line") spend
         # a search + locate + pin turn PER QUEST — 16 died mid-list with
-        # "Reached maximum number of turns" and no answer at all.
-        max_turns=48,
+        # "Reached maximum number of turns" and no answer at all. The overlay
+        # asks one quick thing at a time, so it gets a much smaller budget.
+        max_turns=8 if overlay else 48,
         load_timeout_ms=120000,  # cold CLI start can be slow; avoid init timeouts
     )
 
@@ -522,12 +528,36 @@ async def chat(model_id: str, messages: list[dict], ctx: dict | None = None) -> 
             await out_q.put(_SENTINEL)
 
     task = asyncio.create_task(run_query())
+    # Overlay wall-clock guard: if the whole turn outruns the deadline, stop
+    # waiting on the queue, tell the player plainly, and end — rather than
+    # letting the CLI grind for minutes. Tokens already streamed stay on screen.
+    OVERLAY_DEADLINE_S = 40.0
+    _loop = asyncio.get_running_loop()
+    deadline = _loop.time() + OVERLAY_DEADLINE_S if overlay else None
+    timed_out = False
     try:
         while True:
-            ev = await out_q.get()
+            if deadline is not None:
+                remaining = deadline - _loop.time()
+                if remaining <= 0:
+                    timed_out = True
+                    break
+                try:
+                    ev = await asyncio.wait_for(out_q.get(), timeout=remaining)
+                except asyncio.TimeoutError:
+                    timed_out = True
+                    break
+            else:
+                ev = await out_q.get()
             if ev is _SENTINEL:
                 break
             yield ev
+        if timed_out:
+            from llm import looplog
+            looplog.log(ctx.get("chat_id", ""), "subscription", "overlay-deadline")
+            yield {"type": "token",
+                   "text": "\n\n_(Stopped — I couldn't pin this down quickly. "
+                           "Try narrowing the question or asking in the main app.)_"}
     finally:
         if not task.done():
             task.cancel()

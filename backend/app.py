@@ -1091,6 +1091,7 @@ async def chat_endpoint(body: ChatBody):
     ctx = {
         "chat_id": body.chat_id,     # correlates the agent-loop flight recorder
         "engine": body.auth,
+        "surface": body.surface,     # "overlay" gets a tighter round/time budget
         "annotate_handler": _annotate_handler(body.chat_id, tmp=True),
         "save_asset": _save_asset(body.chat_id),
         "create_doc": _create_doc,

@@ -879,6 +879,18 @@ export default function App() {
     return () => { cancelled = true; window.clearTimeout(t); };
   }, [autoCheckUpdates, autoInstallUpdates]);
 
+  // The overlay writes chats from its own window, so this window's sidebar
+  // goes stale (only the chats present at load show up). Refetch when it
+  // signals a change, so new overlay conversations appear in the list.
+  useEffect(() => {
+    let un: (() => void) | undefined;
+    import("@tauri-apps/api/event")
+      .then(({ listen }) => listen("overlay://chats-changed", () => { void refreshChats(); }))
+      .then((u) => { un = u; })
+      .catch(() => { /* plain-web dev */ });
+    return () => { if (un) un(); };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // The overlay drawer's "Open in app": land on that database record.
   useEffect(() => {
     let un: (() => void) | undefined;
