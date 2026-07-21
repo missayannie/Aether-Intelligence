@@ -23,6 +23,31 @@ pub const OVERLAY_LABEL: &str = "overlay";
 #[cfg(windows)]
 static PREV_FOREGROUND: std::sync::Mutex<Option<isize>> = std::sync::Mutex::new(None);
 
+/// True when Final Fantasy XIV is actually running. The overlay is a GAME
+/// overlay — with no game there's nothing to overlay, and popping it over the
+/// desktop or another app is just noise (the bug this guards). Detected by the
+/// client's main top-level window class, "FFXIVGAME": present whenever the
+/// game is up (even minimized or in the background), absent for the launcher
+/// alone. Every FFXIV overlay and parser keys off this same class.
+///
+/// Debug builds bypass the check so `tauri dev` can exercise the overlay
+/// without the game running; release builds enforce it.
+#[cfg(windows)]
+fn ffxiv_present() -> bool {
+    use windows::core::{w, PCWSTR};
+    use windows::Win32::UI::WindowsAndMessaging::FindWindowW;
+    unsafe { FindWindowW(w!("FFXIVGAME"), PCWSTR::null()).is_ok() }
+}
+#[cfg(not(windows))]
+fn ffxiv_present() -> bool {
+    true // non-Windows is dev-only; never gate there
+}
+
+/// Gate for the summon paths: is it OK to bring the overlay up right now?
+fn may_summon() -> bool {
+    cfg!(debug_assertions) || ffxiv_present()
+}
+
 #[cfg(windows)]
 fn remember_foreground(app: &AppHandle) {
     use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
@@ -206,6 +231,10 @@ fn capture_screen_jpeg() -> Result<String, String> {
 /// (works even if the event listener was never attached), because a stranded
 /// hotkey is the one failure the user can't see past.
 pub fn summon_ask(app: &AppHandle) {
+    if !may_summon() {
+        eprintln!("[overlay] ignoring Ask hotkey — Final Fantasy XIV isn't running");
+        return;
+    }
     match ensure_window(app, "summon=1") {
         Ok((w, created)) => {
             let _ = w.show();
@@ -232,6 +261,10 @@ pub fn summon_ask(app: &AppHandle) {
 /// Alt+D — summon the database DRAWER (concept 4): search the whole database
 /// without leaving the game. Same dual-channel delivery as the pill.
 pub fn summon_drawer(app: &AppHandle) {
+    if !may_summon() {
+        eprintln!("[overlay] ignoring Database hotkey — Final Fantasy XIV isn't running");
+        return;
+    }
     match ensure_window(app, "drawer=1") {
         Ok((w, created)) => {
             let _ = w.show();
@@ -253,12 +286,45 @@ pub fn summon_drawer(app: &AppHandle) {
 /// Alt+Win+` — show the overlay LAYER (ambient widgets, click-through) without
 /// opening the pill. The quiet way in.
 pub fn show_ambient(app: &AppHandle) {
+    if !may_summon() {
+        eprintln!("[overlay] ignoring ambient hotkey — Final Fantasy XIV isn't running");
+        return;
+    }
     match ensure_window(app, "") {
         Ok((w, _)) => {
             let _ = w.show();
         }
         Err(e) => eprintln!("[overlay] create failed: {e}"),
     }
+}
+
+/// Watchdog: when the game goes away, so does the overlay. Pairs with the
+/// summon gate — together they keep the overlay strictly something that
+/// appears over a running FFXIV, never lingering over the desktop after the
+/// player quits. Release-only, like the gate (debug builds run the overlay
+/// without the game). Never auto-SHOWS — only hides; the player resummons.
+pub fn start_ffxiv_watcher(app: &AppHandle) {
+    if cfg!(debug_assertions) {
+        return;
+    }
+    let app = app.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        if ffxiv_present() {
+            continue;
+        }
+        let Some(w) = app.get_webview_window(OVERLAY_LABEL) else { continue };
+        if w.is_visible().unwrap_or(false) {
+            // Same teardown as the kill switch, so the game is never left
+            // input-starved behind an invisible window.
+            let _ = w.set_ignore_cursor_events(true);
+            #[cfg(windows)]
+            restore_foreground();
+            let _ = app.emit("overlay://reset", ());
+            let _ = w.eval("window.__aetherOverlayReset && window.__aetherOverlayReset()");
+            let _ = w.hide();
+        }
+    });
 }
 
 /// Drawer action "Open in app": raise the main window on this database record.
@@ -451,4 +517,32 @@ pub async fn overlay_set_capture(app: AppHandle, capture: bool) -> Result<(), St
         restore_foreground();
     }
     Ok(())
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    // Proves the game-detection MECHANISM discriminates present from absent
+    // window classes — independent of whether FFXIV happens to be running, so
+    // it holds in CI too. (During development this same call was observed
+    // returning true against a live ffxiv_dx11 client, confirming the real
+    // positive path; the durable assertion here is the discrimination itself.)
+    #[test]
+    fn find_window_by_class_discriminates_present_from_absent() {
+        use windows::core::{w, PCWSTR};
+        use windows::Win32::UI::WindowsAndMessaging::FindWindowW;
+
+        // A class that always exists on an interactive desktop (the taskbar)
+        // must read present — the same code path ffxiv_present() uses.
+        let tray = unsafe { FindWindowW(w!("Shell_TrayWnd"), PCWSTR::null()).is_ok() };
+        assert!(tray, "Shell_TrayWnd should be found on a normal desktop session");
+
+        // A class that cannot exist must read absent — so a running overlay is
+        // never a false positive from FindWindowW simply always succeeding.
+        let bogus = unsafe {
+            FindWindowW(w!("AetherNoSuchWindowClass_ZZZ"), PCWSTR::null()).is_ok()
+        };
+        assert!(!bogus, "a nonexistent window class must read absent");
+    }
 }

@@ -520,6 +520,11 @@ pub fn run() {
                 }
             }
 
+            // Keep the overlay tied to the game: hide it if FFXIV quits while
+            // it's up. The summon paths already refuse to open it without the
+            // game (overlay::may_summon); this covers the other direction.
+            overlay::start_ffxiv_watcher(app.handle());
+
             // System tray: always present, so the app is reachable while the
             // main window is hidden (the "keep running in background" setting)
             // and killable if anything ever wedges.
