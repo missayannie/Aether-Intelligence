@@ -29,14 +29,26 @@ function fmtDelta(sec: number): string {
 const IN_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 const LAYOUT_KEY = "ov-layout-v1";
 
-async function setCapture(capture: boolean) {
-  if (!IN_TAURI) return; // plain-web dev preview: render only
-  const { invoke } = await import("@tauri-apps/api/core");
-  try {
-    await invoke("overlay_set_capture", { capture });
-  } catch (e) {
-    console.error("overlay_set_capture failed", e);
-  }
+// Capture toggles are SERIALIZED through this chain. They used to fire as
+// independent invokes with no ordering guarantee: the focus-retry loop keeps a
+// setCapture(true) in flight for up to ~1.4s after a summon, and a quick click
+// outside fires setCapture(false) concurrently — if the stale `true` happened
+// to land last on the backend, the window kept eating clicks and the game was
+// unreachable until the next summon. Chaining makes them apply in call order,
+// so a release (always requested last) always wins.
+let _captureChain: Promise<void> = Promise.resolve();
+
+function setCapture(capture: boolean): Promise<void> {
+  if (!IN_TAURI) return Promise.resolve(); // plain-web dev preview: render only
+  _captureChain = _captureChain.then(async () => {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("overlay_set_capture", { capture });
+    } catch (e) {
+      console.error("overlay_set_capture failed", e);
+    }
+  });
+  return _captureChain;
 }
 
 // Widget scale, set from the main app's Settings ("Overlay size"). Applied as
