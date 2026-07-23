@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+
+# Capacitor / Xcode (generated on the Mac by `cap add ios` + CocoaPods)
+ios/App/Pods/
+ios/App/App/public/
+ios/DerivedData/
+ios/build/

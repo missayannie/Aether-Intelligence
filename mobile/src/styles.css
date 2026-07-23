@@ -1,0 +1,76 @@
+/* Aether companion — Eorzean Night, tuned for a phone. */
+:root {
+  --bg0: #0b1220;
+  --bg1: #111b2e;
+  --bg2: #18253c;
+  --border: #24344f;
+  --text: #e6ecf5;
+  --muted: #8fa0bd;
+  --accent: #7fb3e6;
+  --accent-bg: #16273f;
+  --ok: #6cc0a8;
+  --danger: #e07b6b;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; }
+body {
+  background: var(--bg0);
+  color: var(--text);
+  font-family: -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.screen {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  /* Respect the notch / home indicator. */
+  padding: max(24px, env(safe-area-inset-top)) 20px max(24px, env(safe-area-inset-bottom));
+  max-width: 520px;
+  margin: 0 auto;
+}
+
+.hd { display: flex; gap: 12px; align-items: flex-start; margin-top: 8px; }
+.hd .mark { color: var(--accent); font-size: 22px; line-height: 1.2; }
+.hd h1 { font-size: 21px; margin: 0 0 4px; font-weight: 650; letter-spacing: -.01em; }
+.hd .sub { margin: 0; color: var(--muted); font-size: 13.5px; line-height: 1.5; }
+
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field .lbl { font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.in {
+  background: var(--bg2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 11px;
+  padding: 13px 14px; font-size: 16px; outline: none;
+  font-family: ui-monospace, "SF Mono", monospace;
+}
+.in:focus { border-color: var(--accent); }
+
+.btn {
+  background: var(--accent-bg); color: var(--accent);
+  border: 1px solid var(--border); border-radius: 11px;
+  padding: 14px; font-size: 15px; font-weight: 600; cursor: pointer;
+}
+.btn:active { background: var(--bg2); }
+.btn:disabled { opacity: .5; }
+
+.card {
+  border: 1px solid var(--border); border-radius: 13px;
+  background: var(--bg1); padding: 16px; display: flex; flex-direction: column; gap: 6px;
+}
+.card.ok { border-color: color-mix(in srgb, var(--ok) 45%, var(--border)); }
+.card.err { border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); }
+.pill {
+  align-self: flex-start; font-size: 12px; font-weight: 600;
+  padding: 3px 10px; border-radius: 999px; margin-bottom: 2px;
+}
+.card.ok .pill { color: var(--ok); background: color-mix(in srgb, var(--ok) 15%, transparent); }
+.card.err .pill { color: var(--danger); background: color-mix(in srgb, var(--danger) 15%, transparent); }
+.card .big { margin: 0; font-size: 17px; font-weight: 640; }
+.card p { margin: 0; font-size: 14px; color: var(--muted); line-height: 1.5; }
+.mono { font-family: ui-monospace, "SF Mono", monospace; font-size: 12.5px; }
+.dim { color: var(--muted); opacity: .8; }
+
+.foot { margin-top: auto; font-size: 12px; color: var(--muted); line-height: 1.5; }
