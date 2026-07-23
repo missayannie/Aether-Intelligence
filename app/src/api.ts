@@ -25,6 +25,17 @@ export type Model = {
   output_cost_per_token: number;
 };
 
+// Companion pairing (v2).
+export type PairedDevice = { id: string; name: string; created_at: string; last_seen: string };
+export type PairStart = {
+  code: string;
+  expires_in: number;
+  hosts: string[];
+  uri: string;                 // aether://pair?… deep link, also the QR contents
+  qr: string;                  // SVG data URI of the QR ("" if unavailable)
+  payload: { v: number; name: string; sid: string; hosts: string[]; code: string; exp: number };
+};
+
 export type SubStatus = {
   cli_found: boolean;
   cli_path: string | null;
@@ -291,6 +302,16 @@ export const api = {
   getAppSettings: () => j<Record<string, unknown>>("/settings"),
   putAppSettings: (settings: Record<string, unknown>) =>
     j("/settings", { method: "PUT", body: JSON.stringify({ settings }) }),
+
+  // Companion-device pairing (v2). The desktop mints a single-use code (QR); a
+  // phone on your LAN / Tailscale claims it for its own token. These three are
+  // the desktop side — /pair/claim is called by the phone, not from here.
+  pairStart: () => j<PairStart>("/pair/start", { method: "POST" }),
+  pairDevices: () =>
+    j<{ devices: PairedDevice[]; enabled: boolean; server_id: string;
+        server_name: string; hosts: string[] }>("/pair/devices"),
+  pairRevoke: (id: string) =>
+    j<{ ok: boolean }>(`/pair/devices/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
   subStatus: () => j<SubStatus>("/subscription/status"),
   setSubToken: (token: string) =>

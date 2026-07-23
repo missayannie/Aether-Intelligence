@@ -24,9 +24,9 @@ import shutil
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, FileResponse, PlainTextResponse, Response
+from fastapi.responses import StreamingResponse, FileResponse, PlainTextResponse, Response, JSONResponse
 from pydantic import BaseModel
 
 from config import MODEL_CATALOG, OTHER_SOURCES
@@ -37,6 +37,7 @@ from llm.dispatch import run as run_chat
 import attachments
 from prompts import OVERLAY_SYSTEM, build_system_prompt
 import subscription
+import pairing
 import workspaces
 from sources.lodestone_character import CharacterClient, LodestoneBlocked
 from annotate.annotate import annotate, spec_from_dict
@@ -55,10 +56,52 @@ app.add_middleware(
     # processes can reach it regardless.
     allow_origin_regex=(
         r"^(https?://localhost(:\d+)?|https?://127\.0\.0\.1(:\d+)?"
-        r"|tauri://localhost|https?://tauri\.localhost)$"
+        r"|tauri://localhost|https?://tauri\.localhost"
+        # A future Capacitor/WKWebView companion loads from these origins.
+        r"|capacitor://localhost|ionic://localhost)$"
     ),
     allow_methods=["*"], allow_headers=["*"],
 )
+
+# ---------- companion-device gate ----------
+# The desktop app talks to us over loopback and is never gated — the app is
+# unchanged. When companion access is enabled (Settings) the server also binds
+# off-loopback (run_backend.py) so a paired phone can reach it; EVERY such
+# non-loopback request must carry a valid device token. See pairing.py.
+#
+# Reachable pre-token over companion: liveness + the claim that mints a token.
+_PAIR_OPEN = {"/health", "/pair/claim"}
+
+
+def _is_loopback(host: str) -> bool:
+    # Empty host = no client info (in-process/ASGI test) — treat as local.
+    return host in ("127.0.0.1", "::1", "localhost", "")
+
+
+def _bearer(header: str | None) -> str:
+    if header and header.lower().startswith("bearer "):
+        return header[7:].strip()
+    return ""
+
+
+@app.middleware("http")
+async def _companion_gate(request: Request, call_next):
+    host = request.client.host if request.client else ""
+    if _is_loopback(host):
+        return await call_next(request)                    # desktop app — untouched
+    if not pairing.companion_enabled():
+        return JSONResponse({"detail": "Companion access is off on this PC."}, status_code=403)
+    path = request.url.path
+    if request.method == "OPTIONS" or path in _PAIR_OPEN:
+        return await call_next(request)
+    # Admin routes (mint a code, list/revoke devices) are desktop-only, even for
+    # a paired phone holding a valid token.
+    if path.startswith("/pair/"):
+        return JSONResponse({"detail": "This action is only available on the desktop."},
+                            status_code=403)
+    if not pairing.verify_token(_bearer(request.headers.get("authorization"))):
+        return JSONResponse({"detail": "Pair this device to continue."}, status_code=401)
+    return await call_next(request)
 
 
 # ---------- health / models / keys ----------
@@ -205,6 +248,53 @@ async def _refresh_profiles_on_start():
 
 @app.get("/health")
 def health():
+    # Identity is here so a companion phone can confirm reachability AND pin the
+    # desktop it trusts (server_id) in the same probe it already makes.
+    return {"ok": True, "app": "Aether Intelligence",
+            "server_id": pairing.server_id(), "server_name": pairing.server_name()}
+
+
+# ---------- companion-device pairing ----------
+# Desktop mints a single-use code (shown as a QR); the phone claims it for a
+# per-device token. Admin routes here are loopback-only (enforced by the gate
+# middleware above); /pair/claim is the one route a not-yet-paired phone may call.
+class PairClaimBody(BaseModel):
+    code: str
+    device_name: str | None = None
+    device_id: str | None = None
+
+
+@app.post("/pair/start")
+def pair_start():
+    return pairing.start()
+
+
+@app.post("/pair/claim")
+def pair_claim(body: PairClaimBody, request: Request):
+    host = request.client.host if request.client else ""
+    if not pairing.allow_claim(host):
+        raise HTTPException(status_code=429, detail="Too many attempts — try again shortly.")
+    try:
+        return pairing.claim(body.code, body.device_name or "", body.device_id or "")
+    except pairing.PairingError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/pair/devices")
+def pair_devices():
+    return {
+        "devices": pairing.list_devices(),
+        "enabled": pairing.companion_enabled(),
+        "server_id": pairing.server_id(),
+        "server_name": pairing.server_name(),
+        "hosts": pairing.hosts(),
+    }
+
+
+@app.delete("/pair/devices/{device_id}")
+def pair_revoke(device_id: str):
+    if not pairing.revoke(device_id):
+        raise HTTPException(status_code=404, detail="No such paired device.")
     return {"ok": True}
 
 

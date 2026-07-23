@@ -27,6 +27,8 @@ import {
   type DbDetailDoc,
   type DbBrowse,
   type SourceInfo,
+  type PairStart,
+  type PairedDevice,
   matchSource,
 } from "./api";
 
@@ -740,6 +742,11 @@ export default function App() {
   // reads this at startup and only re-scrapes profiles that are over 24h stale, so
   // leaving it on doesn't hammer the Lodestone on every restart.
   const [refreshOnStart, setRefreshOnStart] = useState<boolean>(true);
+  // Companion access (v2): when on, the backend binds off-loopback so a paired
+  // phone on your LAN / Tailscale can reach it. Off by default — this toggle is
+  // the security boundary. Applying the bind change needs a restart; the pairing
+  // gate itself reads this live.
+  const [companionEnabled, setCompanionEnabled] = useState<boolean>(false);
   // Closing the main window hides it to the system tray — the overlay and
   // backend keep working; reopen from the tray icon. The Rust shell owns the
   // actual close behavior, so every change is pushed to it (set_close_to_tray).
@@ -1053,6 +1060,7 @@ export default function App() {
           if (typeof s.density === "string") setDensity(s.density);
           if (typeof s.refresh_profile_on_start === "boolean")
             setRefreshOnStart(s.refresh_profile_on_start);
+          if (typeof s.companion_enabled === "boolean") setCompanionEnabled(s.companion_enabled);
           if (typeof s.overlayKeepOpen === "boolean") setOverlayKeepOpen(s.overlayKeepOpen);
           if (typeof s.autoCheckUpdates === "boolean") setAutoCheckUpdates(s.autoCheckUpdates);
           if (typeof s.autoInstallUpdates === "boolean") setAutoInstallUpdates(s.autoInstallUpdates);
@@ -1104,6 +1112,7 @@ export default function App() {
         .putAppSettings({
           theme, density, fontScale, overlayScale, activeWs, leftW, rightW, bottomH, dock,
           refresh_profile_on_start: refreshOnStart,
+          companion_enabled: companionEnabled,
           closeToTray, overlayHotkeysV2: overlayHotkeys,
           autoCheckUpdates, autoInstallUpdates, overlayKeepOpen,
           defaultModel: model, defaultAuth: auth,
@@ -1113,8 +1122,8 @@ export default function App() {
     }, 400);
     return () => window.clearTimeout(t);
   }, [theme, density, fontScale, overlayScale, activeWs, leftW, rightW, bottomH, dock,
-      refreshOnStart, closeToTray, overlayHotkeys, autoCheckUpdates, autoInstallUpdates,
-      overlayKeepOpen, model, auth, splitView, splitW]);
+      refreshOnStart, companionEnabled, closeToTray, overlayHotkeys, autoCheckUpdates,
+      autoInstallUpdates, overlayKeepOpen, model, auth, splitView, splitW]);
 
   const dragTab = useRef<TabId | null>(null);
   const hgutter = useRef(false);
@@ -3505,6 +3514,8 @@ export default function App() {
           onDensity={setDensity}
           refreshOnStart={refreshOnStart}
           onRefreshOnStart={setRefreshOnStart}
+          companionEnabled={companionEnabled}
+          onCompanionEnabled={setCompanionEnabled}
           closeToTray={closeToTray}
           onCloseToTray={changeCloseToTray}
           autoCheckUpdates={autoCheckUpdates}
@@ -3581,6 +3592,7 @@ export default function App() {
     await api.putAppSettings({
       theme, density, fontScale, overlayScale, activeWs, leftW, rightW, bottomH, dock,
       refresh_profile_on_start: refreshOnStart,
+      companion_enabled: companionEnabled,
       defaultModel: model, defaultAuth: auth,
       splitView, splitW,
     });
@@ -3829,6 +3841,117 @@ export const markStamp = (s?: string): void => {
 /** Check GitHub Releases, download the installer, run it. Download and install
  * stay two explicit steps unless "install automatically" is on — this replaces
  * the running program, so it shouldn't happen by surprise. */
+// Companion devices (v2): pair an iOS app to THIS backend over the LAN / a
+// Tailscale network. The toggle is the security boundary — enabling it binds the
+// backend off-loopback (after a restart); every paired phone still needs a token.
+// The desktop mints a single-use pairing code here; the phone claims it.
+function CompanionSettings(props: { enabled: boolean; onEnabled: (v: boolean) => void }) {
+  const [devices, setDevices] = useState<PairedDevice[]>([]);
+  const [pair, setPair] = useState<PairStart | null>(null);
+  const [left, setLeft] = useState(0);       // seconds until the code expires
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const refresh = () =>
+    api.pairDevices().then((r) => setDevices(r.devices)).catch(() => { /* backend down */ });
+  useEffect(() => { refresh(); }, []);
+
+  // Live countdown; the code self-expires, so drop it (and refresh the list, in
+  // case a device claimed it) when it hits zero.
+  useEffect(() => {
+    if (!pair) return;
+    setLeft(pair.expires_in);
+    const t = window.setInterval(() => {
+      setLeft((s) => {
+        if (s <= 1) { window.clearInterval(t); setPair(null); refresh(); return 0; }
+        return s - 1;
+      });
+    }, 1000);
+    return () => window.clearInterval(t);
+  }, [pair]);
+
+  async function startPair() {
+    setErr(""); setBusy(true);
+    try { setPair(await api.pairStart()); }
+    catch (e) { setErr(`Couldn't start pairing: ${String(e)}`); }
+    finally { setBusy(false); }
+  }
+  async function revoke(id: string) {
+    setErr("");
+    try { await api.pairRevoke(id); refresh(); }
+    catch (e) { setErr(`Couldn't remove that device: ${String(e)}`); }
+  }
+
+  return (
+    <div className="companion">
+      <label className="toggle-row">
+        <input
+          type="checkbox"
+          checked={props.enabled}
+          onChange={(e) => props.onEnabled(e.target.checked)}
+        />
+        <span className="toggle-text">
+          <span className="toggle-name">Allow companion devices on my network</span>
+          <span className="toggle-hint">
+            Lets an Aether app on your phone reach this desktop over your LAN or a
+            Tailscale network — it drives the backend running here, so it keeps
+            your game data, keys, and subscription with nothing in the cloud. Off
+            by default. <b>Restart the app after enabling</b> so it starts
+            accepting connections; every device still has to be paired below.
+          </span>
+        </span>
+      </label>
+
+      {props.enabled && (
+        <div className="companion-body">
+          {pair ? (
+            <div className="pair-card">
+              <div className="pair-card-head">
+                <span className="pair-code" title="Single-use pairing code">{pair.code}</span>
+                <span className="pair-left" title="Time left before this code expires">
+                  {String(Math.floor(left / 60))}:{String(left % 60).padStart(2, "0")}
+                </span>
+              </div>
+              <p className="pair-hint">
+                In the phone app, scan this QR or enter the code. Reachable at{" "}
+                {pair.hosts.length ? pair.hosts.join(", ") : "no network address found"}.
+              </p>
+              {pair.qr && (
+                <img className="pair-qr" src={pair.qr} alt="Pairing QR code"
+                     width={168} height={168} />
+              )}
+              <code className="pair-uri" title="The QR contents (deep link)">{pair.uri}</code>
+              <p className="pair-note">
+                The code is single-use and expires in 2 minutes.
+              </p>
+              <button className="pair-cancel" onClick={() => setPair(null)}>Done</button>
+            </div>
+          ) : (
+            <button className="pair-start" onClick={startPair} disabled={busy}>
+              {busy ? "Starting…" : "Pair a device"}
+            </button>
+          )}
+
+          <div className="device-list">
+            {devices.length === 0 ? (
+              <p className="muted small">No paired devices yet.</p>
+            ) : (
+              devices.map((d) => (
+                <div key={d.id} className="device-row">
+                  <span className="device-name">{d.name}</span>
+                  <span className="device-seen">last seen {d.last_seen.replace("T", " ").replace("+00:00", " UTC")}</span>
+                  <button className="device-revoke" onClick={() => revoke(d.id)}>Revoke</button>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+      {err && <p className="pair-err">{err}</p>}
+    </div>
+  );
+}
+
 function UpdatePanel(props: {
   autoCheck: boolean;
   onAutoCheck: (v: boolean) => void;
@@ -4017,6 +4140,8 @@ function Settings(props: {
   onDensity: (id: string) => void;
   refreshOnStart: boolean;
   onRefreshOnStart: (on: boolean) => void;
+  companionEnabled: boolean;
+  onCompanionEnabled: (on: boolean) => void;
   closeToTray: boolean;
   onCloseToTray: (on: boolean) => void;
   autoCheckUpdates: boolean;
@@ -4242,6 +4367,12 @@ function Settings(props: {
             </span>
           </span>
         </label>
+
+        <div className="section-label">Companion devices</div>
+        <CompanionSettings
+          enabled={props.companionEnabled}
+          onEnabled={props.onCompanionEnabled}
+        />
 
         <div className="section-label">Updates</div>
         <UpdatePanel

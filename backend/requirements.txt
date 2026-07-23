@@ -13,3 +13,4 @@ beautifulsoup4>=4.12
 python-dotenv>=1.0
 pypdf>=5.0
 python-multipart>=0.0.9
+segno>=1.6

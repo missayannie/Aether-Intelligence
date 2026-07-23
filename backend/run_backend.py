@@ -28,6 +28,25 @@ def _watch_parent():
         time.sleep(2)
 
 
+def _bind_host() -> str:
+    """Loopback by default. Companion access (the iOS pairing feature) opts into
+    binding on all interfaces so a paired phone on your LAN / Tailscale can reach
+    the API. Off unless explicitly enabled in Settings — and even when bound, the
+    gate middleware in app.py still requires a valid device token for every
+    non-loopback request. FFXIV_BIND_HOST overrides for dev/testing."""
+    if os.environ.get("FFXIV_BIND_HOST"):
+        return os.environ["FFXIV_BIND_HOST"]
+    try:
+        import json
+        from paths import DATA_DIR
+        s = json.loads((DATA_DIR / "app_settings.json").read_text(encoding="utf-8-sig"))
+        if s.get("companion_enabled"):
+            return "0.0.0.0"
+    except Exception:
+        pass
+    return "127.0.0.1"
+
+
 def main():
     import uvicorn
     from app import app
@@ -36,7 +55,7 @@ def main():
         threading.Thread(target=_watch_parent, daemon=True).start()
 
     port = int(os.environ.get("FFXIV_BACKEND_PORT", "8756"))
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+    uvicorn.run(app, host=_bind_host(), port=port, log_level="warning")
 
 
 if __name__ == "__main__":

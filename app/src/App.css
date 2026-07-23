@@ -1355,6 +1355,66 @@ a[href^="http"]:hover { text-decoration: underline; filter: brightness(1.15); }
 .toggle-name { font-size: 13px; font-weight: 600; }
 .toggle-hint { font-size: 11px; color: var(--muted); line-height: 1.45; }
 
+/* Companion devices (v2) — pairing an iOS app to this backend */
+.companion-body { margin-top: 10px; display: flex; flex-direction: column; gap: 12px; }
+.pair-start {
+  align-self: flex-start; background: var(--accent-bg); color: var(--accent);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 14px;
+  font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.pair-start:hover:not(:disabled) { border-color: var(--accent); }
+.pair-start:disabled { opacity: .5; cursor: default; }
+.pair-card {
+  border: 1px solid var(--accent); border-radius: 11px; background: var(--bg1);
+  padding: 13px 15px; display: flex; flex-direction: column; gap: 9px;
+}
+.pair-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.pair-code {
+  font-family: ui-monospace, "Cascadia Code", monospace; font-size: 15px;
+  font-weight: 600; color: var(--text); letter-spacing: .02em;
+  word-break: break-all;
+}
+.pair-left {
+  font-variant-numeric: tabular-nums; font-size: 13px; color: var(--accent);
+  flex: none; padding: 2px 8px; border: 1px solid var(--border); border-radius: 999px;
+}
+.pair-hint { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
+.pair-qr {
+  align-self: center; display: block; width: 168px; height: 168px;
+  /* White mat + quiet zone so the dark modules always have the contrast a
+     scanner needs, whatever the app theme behind the card is. */
+  background: #fff; border-radius: 10px; padding: 8px;
+  border: 1px solid var(--border);
+}
+.pair-uri {
+  display: block; font-family: ui-monospace, "Cascadia Code", monospace;
+  font-size: 11px; color: var(--muted); background: var(--bg2);
+  border: 1px solid var(--border); border-radius: 7px; padding: 7px 9px;
+  overflow-x: auto; white-space: nowrap; user-select: all;
+}
+.pair-note { margin: 0; font-size: 11px; color: var(--muted); font-style: italic; }
+.pair-cancel {
+  align-self: flex-start; background: var(--bg2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; padding: 5px 12px;
+  font-size: 12px; cursor: pointer;
+}
+.pair-cancel:hover { border-color: var(--accent); }
+.device-list { display: flex; flex-direction: column; gap: 6px; }
+.device-row {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--bg1); border: 1px solid var(--border);
+  border-radius: 9px; padding: 8px 11px;
+}
+.device-name { font-size: 13px; font-weight: 600; }
+.device-seen { font-size: 11px; color: var(--muted); flex: 1; min-width: 0; }
+.device-revoke {
+  flex: none; background: transparent; color: var(--danger);
+  border: 1px solid var(--border); border-radius: 7px; padding: 4px 10px;
+  font-size: 12px; cursor: pointer;
+}
+.device-revoke:hover { border-color: var(--danger); }
+.pair-err { margin: 8px 0 0; font-size: 12px; color: var(--danger); }
+
 /* Auth indicators */
 .pill-auth {
   font-size: 10px; color: var(--accent); border: 1px solid var(--border);
