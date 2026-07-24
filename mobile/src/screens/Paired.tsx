@@ -8,10 +8,12 @@ import { clearConnection } from "../lib/store";
 export default function Paired({
   serverName,
   host,
+  onAsk,
   onForget,
 }: {
   serverName: string;
   host: string;
+  onAsk: () => void;
   onForget: () => void;
 }) {
   const [models, setModels] = useState<number | null>(null);
@@ -45,10 +47,9 @@ export default function Paired({
         {err && <p className="dim">Token check failed: {err}</p>}
       </div>
 
-      <p className="foot">
-        Phase 1 complete — a device token is stored and every request is authenticated.
-        The Ask (chat) screen lands in Phase 2.
-      </p>
+      <button className="btn" onClick={onAsk}>Ask a question</button>
+
+      <p className="foot">Paired and authenticated — ask your desktop anything about the game.</p>
 
       <button className="btn ghost danger" onClick={() => void forget()}>Forget this desktop</button>
     </div>

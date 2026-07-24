@@ -62,6 +62,33 @@ export async function modelsCount(): Promise<number> {
   return j.models?.length ?? 0;
 }
 
+/** The desktop's default model + auth (what a new chat starts on). Falls back to
+ * the first available model. Phase 2 sends this with each chat turn. */
+export async function defaultModel(): Promise<{ id: string; auth: Auth }> {
+  const r = await fetch(`${_base}/models`, { headers: authHeaders() });
+  if (!r.ok) throw new Error(`models: ${r.status}`);
+  const j = (await r.json()) as {
+    models: { id: string; available: boolean; default_auth?: Auth }[];
+    default: { id: string; auth: Auth } | null;
+  };
+  if (j.default) return j.default;
+  const first = j.models.find((m) => m.available);
+  if (!first) throw new Error("The desktop has no model set up yet.");
+  return { id: first.id, auth: first.default_auth ?? "api" };
+}
+
+/** Create a fresh chat on the desktop and return its id. */
+export async function createChat(): Promise<string> {
+  const r = await fetch(`${_base}/chats`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ owner: "" }), // "" -> the desktop's default profile
+  });
+  if (!r.ok) throw new Error(`create chat: ${r.status}`);
+  const j = (await r.json()) as { id: string };
+  return j.id;
+}
+
 /** Stream a chat response — Phase 2. Ported from the desktop's SSE-over-POST
  * reader: `/chat` returns a text stream of `data: {json}\n\n` frames. This is
  * the single biggest reuse win of the Capacitor path (no native rewrite). */
