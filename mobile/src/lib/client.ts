@@ -53,6 +53,15 @@ export async function health(base: string = _base): Promise<Health> {
   return (await r.json()) as Health;
 }
 
+/** Authed probe — proves the device token works (the desktop gates non-loopback
+ * requests). Returns how many models the desktop has available. */
+export async function modelsCount(): Promise<number> {
+  const r = await fetch(`${_base}/models`, { headers: authHeaders() });
+  if (!r.ok) throw new Error(`models: ${r.status}`);
+  const j = (await r.json()) as { models?: unknown[] };
+  return j.models?.length ?? 0;
+}
+
 /** Stream a chat response — Phase 2. Ported from the desktop's SSE-over-POST
  * reader: `/chat` returns a text stream of `data: {json}\n\n` frames. This is
  * the single biggest reuse win of the Capacitor path (no native rewrite). */

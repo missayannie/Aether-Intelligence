@@ -35,3 +35,18 @@ export async function loadConnection(): Promise<Connection | null> {
 export async function clearConnection(): Promise<void> {
   await Preferences.remove({ key: KEY });
 }
+
+// Stable per-install id, sent with /pair/claim so re-pairing replaces this
+// device's token rather than piling up duplicates in the desktop's list.
+const DEVICE_ID_KEY = "aether.deviceId";
+
+export async function getDeviceId(): Promise<string> {
+  const { value } = await Preferences.get({ key: DEVICE_ID_KEY });
+  if (value) return value;
+  const id =
+    (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`)
+      .replace(/-/g, "")
+      .slice(0, 12);
+  await Preferences.set({ key: DEVICE_ID_KEY, value: id });
+  return id;
+}

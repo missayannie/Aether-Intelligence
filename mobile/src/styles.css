@@ -55,6 +55,15 @@ body {
 }
 .btn:active { background: var(--bg2); }
 .btn:disabled { opacity: .5; }
+.btn.ghost { background: var(--bg1); color: var(--text); }
+.btn.ghost:active { background: var(--bg2); }
+.btn.danger { color: var(--danger); }
+.btn.danger:active { background: color-mix(in srgb, var(--danger) 12%, var(--bg1)); }
+
+textarea.link-in {
+  resize: vertical; min-height: 64px; line-height: 1.5;
+  font-size: 13px; width: 100%;
+}
 
 .card {
   border: 1px solid var(--border); border-radius: 13px;
