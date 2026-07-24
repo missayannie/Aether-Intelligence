@@ -39,7 +39,9 @@ export function isPaired(): boolean {
   return !!_token;
 }
 
-function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
+/** Exported so binary fetches (icon PNGs, which an <img> tag can't authenticate)
+ * can reuse the same bearer token without a second copy of the auth state. */
+export function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
   return _token ? { Authorization: `Bearer ${_token}`, ...extra } : extra;
 }
 

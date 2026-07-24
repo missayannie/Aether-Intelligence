@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import DbIcon from "../components/DbIcon";
 import { BROWSE_KINDS, KIND_LABEL, search, type Kind, type SearchHit } from "../lib/db";
 
 // The Database tab's root: a search field over a grid of the 13 browsable kinds.
@@ -76,6 +77,7 @@ export default function Database({
             {hits.map((h) => (
               <li key={`${h.type}-${h.id}`}>
                 <button className="row" onClick={() => onOpenRecord(h.type, h.id, h.name)}>
+                  <DbIcon url={h.icon} className="row-icon" />
                   <span className="row-name">{h.name}</span>
                   <span className="row-tag">{KIND_LABEL[h.type as Kind] ?? h.type}</span>
                 </button>

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import DbIcon from "../components/DbIcon";
 import { record, type Record_ } from "../lib/db";
 
 // One record. Two shapes come back:
@@ -113,8 +114,11 @@ export default function DbRecord({
 
         {rec && !notFound && (
           <>
+            {/* Instances ship a splash banner (`image`) like Garland's header. */}
+            {str(rec.image) && <DbIcon url={str(rec.image)} className="rec-banner" />}
+
             <div className="rec-head">
-              {str(rec.icon) && <img className="rec-icon" src={str(rec.icon)} alt="" />}
+              <DbIcon url={str(rec.icon)} className="rec-icon" />
               <div>
                 <h2 className="rec-name">{heading}</h2>
                 {sub && <p className="rec-sub">{sub}</p>}
@@ -144,7 +148,7 @@ export default function DbRecord({
                         className="row"
                         onClick={() => onOpenRecord(ref.kind || "item", ref.id, ref.name)}
                       >
-                        {ref.icon && <img className="row-icon" src={ref.icon} alt="" />}
+                        <DbIcon url={ref.icon} className="row-icon" />
                         <span className="row-name">{ref.name}</span>
                         {ref.sub && <span className="row-sub">{ref.sub}</span>}
                       </button>

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import DbIcon from "../components/DbIcon";
 import {
   browse, clearItemCache, isSearchable, KIND_LABEL, search,
   type BrowseGroup, type Kind, type SearchHit,
@@ -112,6 +113,7 @@ export default function DbList({
               {hits.map((h) => (
                 <li key={`${h.type}-${h.id}`}>
                   <button className="row" onClick={() => onOpenRecord(h.type, h.id, h.name)}>
+                    <DbIcon url={h.icon} className="row-icon" />
                     <span className="row-name">{h.name}</span>
                   </button>
                 </li>
@@ -138,6 +140,7 @@ export default function DbList({
                     {g.rows.map((r) => (
                       <li key={String(r.id)}>
                         <button className="row" onClick={() => onOpenRecord(kind, r.id, r.name)}>
+                          <DbIcon url={r.icon} className="row-icon" />
                           <span className="row-name">{r.name}</span>
                           {r.sub && <span className="row-sub">{r.sub}</span>}
                         </button>
