@@ -198,6 +198,135 @@ class WikiClient:
                 return page
         return direct
 
+    def _wikitext(self, wiki_id: str, title: str) -> tuple[str, str]:
+        """(resolved_title, raw wikitext) for a page, redirects resolved; empty
+        strings if it's missing. Wikitext, not rendered HTML, because an action
+        page's ==History== is a list of {{patch|version|text}} templates that read
+        cleanest at the source (and the HTML section extractor deliberately drops
+        History as chrome)."""
+        data = self._get_json(self._api(wiki_id), {
+            "action": "parse", "page": title, "prop": "wikitext",
+            "redirects": 1, "format": "json",
+        })
+        parse = data.get("parse", {})
+        return parse.get("title", ""), parse.get("wikitext", {}).get("*", "")
+
+    def ability_history(self, name: str, wiki_id: str = "consolegames") -> dict:
+        """Patch-by-patch change history for an ABILITY, from its wiki action
+        page's ==History== section. This is what catches the reworks the official
+        patch notes never name — e.g. Huton's weaponskill/auto-attack-speed buff
+        being revamped out in 7.0. Returns {found, topic, url, changes:[{patch,
+        text}]} newest-first, or {found: False} when `name` isn't an action page (a
+        lore namesake, an item, a system), so the caller can fall back to the notes
+        archive."""
+        name = (name or "").strip()
+        if wiki_id not in WIKIS:
+            wiki_id = "consolegames"
+        if not name:
+            return {"found": False}
+
+        resolved, wt = self._wikitext(wiki_id, name)
+        entries = _parse_ability_history(wt)
+        if not entries:
+            # A bare name may resolve to the lore page (e.g. "Bahamut" the Primal);
+            # the action lives at a different title. Scan search hits for the one
+            # that actually carries a {{patch}} history block.
+            for hit in self.search(wiki_id, name, limit=5):
+                if hit["title"].lower() == name.lower():
+                    continue
+                r2, wt2 = self._wikitext(wiki_id, hit["title"])
+                e2 = _parse_ability_history(wt2)
+                if e2:
+                    resolved, entries = r2, e2
+                    break
+        if not entries:
+            return {"found": False, "topic": name}
+
+        return {
+            "found": True,
+            "topic": resolved,
+            "source": WIKIS[wiki_id]["label"],
+            "url": _origin(self._api(wiki_id)) + "/wiki/" + resolved.replace(" ", "_"),
+            "changed_in": [e["patch"] for e in entries],
+            "changes": entries,       # newest first, as the wiki lists them
+        }
+
+
+def _split_top_pipes(s: str, limit: int) -> list[str]:
+    """Split `s` on top-level `|` only (never inside {{…}} or [[…]]), at most
+    `limit` times — so {{patch|7.0|…{{action icon|Foo}}…}} splits into
+    ['patch', '7.0', '…{{action icon|Foo}}…'] without breaking on the inner pipe."""
+    parts: list[str] = []
+    buf: list[str] = []
+    depth = 0
+    i = 0
+    while i < len(s):
+        two = s[i:i + 2]
+        if two in ("{{", "[["):
+            depth += 1; buf.append(two); i += 2
+        elif two in ("}}", "]]"):
+            depth = max(0, depth - 1); buf.append(two); i += 2
+        elif s[i] == "|" and depth == 0 and len(parts) < limit:
+            parts.append("".join(buf)); buf = []; i += 1
+        else:
+            buf.append(s[i]); i += 1
+    parts.append("".join(buf))
+    return parts
+
+
+def _clean_wikitext(t: str) -> str:
+    """Flatten a wiki change line to plain text — nested templates to their name,
+    links to their label, drop bullet/bold markup."""
+    import re
+    t = re.sub(r"\{\{[^{}|]*\|([^{}|]*)(?:\|[^{}]*)?\}\}", r"\1", t)  # {{action icon|Foo}} -> Foo
+    t = re.sub(r"\{\{([^{}]*)\}\}", r"\1", t)                        # {{bare}} -> bare
+    t = re.sub(r"\[\[[^\]|]*\|([^\]]*)\]\]", r"\1", t)               # [[link|label]] -> label
+    t = re.sub(r"\[\[([^\]]*)\]\]", r"\1", t)                        # [[link]] -> link
+    t = re.sub(r"'''?", "", t).replace("*", " ")                    # bold/italic, bullets
+    t = re.sub(r"<[^>]+>", "", t)                                   # stray <br> etc.
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def _parse_ability_history(wikitext: str) -> list[dict]:
+    """An action page's ==History== section as [{patch, text}], newest first,
+    parsed from its {{patch|version|text}} entries. [] if there's no such section."""
+    import re
+    if not wikitext:
+        return []
+    m = re.search(r"==+\s*History\s*==+", wikitext, re.I)
+    if not m:
+        return []
+    section = wikitext[m.end():]
+    nxt = re.search(r"\n==+[^=]", section)     # next top-level heading ends it
+    if nxt:
+        section = section[:nxt.start()]
+
+    entries: list[dict] = []
+    for start in re.finditer(r"\{\{patch\|", section, re.I):
+        j = start.start()
+        depth = 0
+        k = j
+        while k < len(section):               # brace-match to the closing }}
+            if section[k:k + 2] == "{{":
+                depth += 1; k += 2
+            elif section[k:k + 2] == "}}":
+                depth -= 1; k += 2
+                if depth == 0:
+                    break
+            else:
+                k += 1
+        parts = _split_top_pipes(section[j + 2:k - 2], limit=2)   # patch|version|text
+        if len(parts) < 2 or parts[0].strip().lower() != "patch":
+            continue
+        version = parts[1].strip()
+        if not version:
+            continue
+        text = _clean_wikitext(parts[2]) if len(parts) >= 3 else ""
+        entries.append({"patch": version, "text": text[:600]})
+        if len(entries) >= 40:
+            break
+    return entries
+
 
 def _query_minus_title(query: str, title: str) -> str:
     """The query words that are NOT part of the resolved page title — the part

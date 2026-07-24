@@ -499,16 +499,17 @@ TOOLS = [
         "function": {
             "name": "patch_history",
             "description": (
-                "Trace how a job/ability/item/system CHANGED over time, from the "
-                "official patch-notes archive. Use this whenever the player asks how "
-                "or when something changed, what it USED TO do, why it differs from "
-                "what they remember, or its history — every OTHER source (the item "
-                "database, the wiki, the installed game client) reflects only the "
-                "CURRENT patch and will otherwise assume today's values were always "
-                "true. Returns the past patches (newest first) that mention the "
-                "topic, with excerpts, so you can say what changed and in which "
-                "patch. Example: 'Huton' surfaces the patch that removed its "
-                "attack-speed bonus. Costs a few seconds the first time, then cached."
+                "Trace how a job/ability/item/system CHANGED over time. For an "
+                "ABILITY it reads the wiki action page's full patch-by-patch history "
+                "— which captures the reworks the official patch notes never name "
+                "(e.g. Huton losing its weaponskill/auto-attack-speed buff in 7.0); "
+                "for anything else it sweeps the official patch-notes archive. Use it "
+                "whenever the player asks how or when something changed, what it USED "
+                "TO do, why it differs from what they remember, or its history — "
+                "every OTHER source (the item database, a normal wiki lookup, the "
+                "game client) reflects only the CURRENT patch and will otherwise "
+                "assume today's values were always true. Returns the past patches "
+                "that changed the topic, newest first, with what changed."
             ),
             "parameters": {
                 "type": "object",
@@ -874,6 +875,14 @@ def _execute_tool(name: str, args: dict, ctx: dict | None = None) -> str:
             topic = (args.get("topic") or "").strip()
             if not topic:
                 return _dump({"found": False, "note": "topic is required"})
+            # An ABILITY's wiki action page carries a structured {{patch}} timeline
+            # that captures the reworks the patch notes never name (Huton's
+            # attack-speed buff removal, etc.) — try that first, cheaply.
+            wiki_hist = _wiki.ability_history(topic)
+            if wiki_hist.get("found"):
+                return _dump(wiki_hist)
+            # Not an action page (item, system, or lore namesake) -> sweep the
+            # official patch-notes archive instead.
             return _dump(patchnotes.history(topic))
 
         if name == "lookup_item":
