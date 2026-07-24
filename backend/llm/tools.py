@@ -497,6 +497,38 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "patch_history",
+            "description": (
+                "Trace how a job/ability/item/system CHANGED over time, from the "
+                "official patch-notes archive. Use this whenever the player asks how "
+                "or when something changed, what it USED TO do, why it differs from "
+                "what they remember, or its history — every OTHER source (the item "
+                "database, the wiki, the installed game client) reflects only the "
+                "CURRENT patch and will otherwise assume today's values were always "
+                "true. Returns the past patches (newest first) that mention the "
+                "topic, with excerpts, so you can say what changed and in which "
+                "patch. Example: 'Huton' surfaces the patch that removed its "
+                "attack-speed bonus. Costs a few seconds the first time, then cached."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {
+                        "type": "string",
+                        "description": (
+                            "The exact in-game name to trace — an ability ('Huton'), "
+                            "a job ('Ninja'), an item, or a system, spelled as it "
+                            "appears in patch notes."
+                        ),
+                    },
+                },
+                "required": ["topic"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "search_forum",
             "description": (
                 "Search the OFFICIAL Square Enix FFXIV forum for a topic and get "
@@ -836,6 +868,13 @@ def _execute_tool(name: str, args: dict, ctx: dict | None = None) -> str:
             if not topic:
                 return _dump(patchnotes.summary(patch))
             return _dump(patchnotes.search(patch, topic))
+
+        if name == "patch_history":
+            from sources import patchnotes
+            topic = (args.get("topic") or "").strip()
+            if not topic:
+                return _dump({"found": False, "note": "topic is required"})
+            return _dump(patchnotes.history(topic))
 
         if name == "lookup_item":
             res = _garland.lookup(args["name"])
