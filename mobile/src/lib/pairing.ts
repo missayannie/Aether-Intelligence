@@ -74,7 +74,9 @@ export async function claimFromUri(uri: string): Promise<Claimed | null> {
   const deviceId = await getDeviceId();
   const c = await claim(payload, deviceId);
   await saveConnection({
-    host: c.host, token: c.token, serverId: c.serverId, serverName: c.serverName,
+    host: c.host,
+    hosts: payload.hosts.map(toBase), // keep every address for roaming reconnect
+    token: c.token, serverId: c.serverId, serverName: c.serverName,
   });
   setConnection(c.host, c.token); // subsequent requests now carry the bearer token
   return c;

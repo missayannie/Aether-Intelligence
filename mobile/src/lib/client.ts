@@ -43,14 +43,39 @@ function authHeaders(extra: Record<string, string> = {}): Record<string, string>
   return _token ? { Authorization: `Bearer ${_token}`, ...extra } : extra;
 }
 
+/** Roaming reconnect: try each candidate host until one answers `/health`, then
+ * point the client at it. Returns the working base, or null if none respond
+ * (desktop asleep / off-network). The token is applied on success. */
+export async function reconnect(hosts: string[], token: string): Promise<string | null> {
+  for (const base of hosts) {
+    const clean = base.replace(/\/+$/, "");
+    try {
+      await health(clean); // open route — no token needed to probe
+      setConnection(clean, token);
+      return clean;
+    } catch {
+      /* try the next candidate */
+    }
+  }
+  return null;
+}
+
 /** Liveness + identity. Phase 0 passes an explicit `base` to probe a typed host
  * before committing to it; once connected it defaults to the current base.
  * `/health` is an open route, so this works before a token exists. */
-export async function health(base: string = _base): Promise<Health> {
+export async function health(base: string = _base, timeoutMs = 4000): Promise<Health> {
   const target = base.replace(/\/+$/, "");
-  const r = await fetch(`${target}/health`, { headers: authHeaders() });
-  if (!r.ok) throw new Error(`Backend returned ${r.status}`);
-  return (await r.json()) as Health;
+  // Bound the probe — an unreachable host must fail in seconds, not hang the
+  // reconnect (a browser fetch would otherwise wait tens of seconds).
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const r = await fetch(`${target}/health`, { headers: authHeaders(), signal: ctrl.signal });
+    if (!r.ok) throw new Error(`Backend returned ${r.status}`);
+    return (await r.json()) as Health;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Authed probe — proves the device token works (the desktop gates non-loopback

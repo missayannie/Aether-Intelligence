@@ -1,8 +1,19 @@
 import { useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { createChat, defaultModel, streamChat, type Auth, type ChatEvent } from "../lib/client";
 
 type Source = { label: string; url: string };
 type Msg = { role: "user" | "assistant"; content: string; sources?: Source[] };
+
+// Real http links open in the browser; the desktop's custom refs (e.g. map:…)
+// aren't navigable on the phone, so they render as plain emphasized text.
+const md = {
+  a: ({ href, children }: { href?: string; children?: React.ReactNode }) =>
+    href && /^https?:/i.test(href)
+      ? <a href={href} target="_blank" rel="noreferrer">{children}</a>
+      : <span className="md-ref">{children}</span>,
+};
 
 export default function Chat({ serverName, onBack }: { serverName: string; onBack: () => void }) {
   const [msgs, setMsgs] = useState<Msg[]>([]);
@@ -87,8 +98,14 @@ export default function Chat({ serverName, onBack }: { serverName: string; onBac
         )}
         {msgs.map((m, i) => (
           <div key={i} className={"msg " + m.role}>
-            <div className="bubble">
-              {m.content || (m.role === "assistant" && streaming && i === msgs.length - 1 ? "…" : "")}
+            <div className={"bubble" + (m.role === "assistant" ? " md" : "")}>
+              {m.role === "assistant" ? (
+                m.content
+                  ? <ReactMarkdown remarkPlugins={[remarkGfm]} components={md}>{m.content}</ReactMarkdown>
+                  : (streaming && i === msgs.length - 1 ? "…" : "")
+              ) : (
+                m.content
+              )}
             </div>
             {m.sources && m.sources.length > 0 && (
               <div className="msg-sources">

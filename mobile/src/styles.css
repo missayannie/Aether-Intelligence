@@ -109,6 +109,25 @@ textarea.link-in {
 }
 .msg.user .bubble { background: var(--accent-bg); color: var(--accent-text, var(--text)); border-bottom-right-radius: 5px; }
 .msg.assistant .bubble { background: var(--bg1); border: 1px solid var(--border); border-bottom-left-radius: 5px; }
+/* Markdown inside assistant bubbles — tighten block spacing to bubble scale. */
+.bubble.md > :first-child { margin-top: 0; }
+.bubble.md > :last-child { margin-bottom: 0; }
+.bubble.md p { margin: 0 0 8px; }
+.bubble.md ul, .bubble.md ol { margin: 6px 0; padding-left: 20px; }
+.bubble.md li { margin: 2px 0; }
+.bubble.md a { color: var(--accent); }
+.bubble.md code {
+  font-family: ui-monospace, "SF Mono", monospace; font-size: 13px;
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px;
+}
+.bubble.md pre { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 10px; overflow-x: auto; }
+.bubble.md pre code { background: none; border: none; padding: 0; }
+.bubble.md table { border-collapse: collapse; font-size: 13px; }
+.bubble.md th, .bubble.md td { border: 1px solid var(--border); padding: 4px 8px; }
+.md-ref { color: var(--muted); font-style: italic; }
+
+.splash { align-items: center; justify-content: center; gap: 14px; text-align: center; }
+.mark.big { font-size: 40px; color: var(--accent); }
 .msg-sources { display: flex; flex-wrap: wrap; gap: 6px; }
 .msg-sources a {
   font-size: 11.5px; color: var(--accent); text-decoration: none;

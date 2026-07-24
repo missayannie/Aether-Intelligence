@@ -9,7 +9,8 @@ import { Preferences } from "@capacitor/preferences";
 import { getSecret, removeSecret, setSecret } from "./secure";
 
 export type Connection = {
-  host: string;        // e.g. "http://desktop.tailnet.ts.net:8756"
+  host: string;        // last-known-good base, e.g. "http://desktop.tailnet.ts.net:8756"
+  hosts: string[];     // all candidate bases from pairing — for roaming reconnect
   token: string;       // device bearer token ("" until paired — Phase 1)
   serverId: string;    // pinned so we know we're reconnecting to the same PC
   serverName: string;
@@ -31,6 +32,10 @@ export async function loadConnection(): Promise<Connection | null> {
   let rest: Omit<Connection, "token">;
   try {
     rest = JSON.parse(value) as Omit<Connection, "token">;
+    // Back-compat: connections stored before roaming had no `hosts` list.
+    if (!Array.isArray(rest.hosts) || rest.hosts.length === 0) {
+      rest.hosts = rest.host ? [rest.host] : [];
+    }
   } catch {
     return null;
   }
