@@ -773,6 +773,17 @@ export default function App() {
       .catch(() => { /* plain-web dev */ });
   };
 
+  // Companion access: flip the setting, then open (or close) the LAN firewall
+  // rule for the backend. The firewall step needs admin, so it raises a UAC
+  // prompt; errors propagate so the Settings panel can tell the user pairing
+  // won't reach this PC until it's allowed.
+  const changeCompanionEnabled = async (v: boolean): Promise<void> => {
+    setCompanionEnabled(v);
+    if (!("__TAURI_INTERNALS__" in window)) return; // plain-web dev: no firewall
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("set_companion_firewall", { enabled: v });
+  };
+
   // Overlay hotkeys — editable in Settings, applied live by the Rust shell.
   // Values are global-shortcut accelerator strings ("Alt+Backquote").
   const [overlayHotkeys, setOverlayHotkeys] = useState<OverlayHotkeySet>(OVERLAY_HOTKEY_DEFAULTS);
@@ -3515,7 +3526,7 @@ export default function App() {
           refreshOnStart={refreshOnStart}
           onRefreshOnStart={setRefreshOnStart}
           companionEnabled={companionEnabled}
-          onCompanionEnabled={setCompanionEnabled}
+          onCompanionEnabled={changeCompanionEnabled}
           closeToTray={closeToTray}
           onCloseToTray={changeCloseToTray}
           autoCheckUpdates={autoCheckUpdates}
@@ -3845,12 +3856,13 @@ export const markStamp = (s?: string): void => {
 // Tailscale network. The toggle is the security boundary — enabling it binds the
 // backend off-loopback (after a restart); every paired phone still needs a token.
 // The desktop mints a single-use pairing code here; the phone claims it.
-function CompanionSettings(props: { enabled: boolean; onEnabled: (v: boolean) => void }) {
+function CompanionSettings(props: { enabled: boolean; onEnabled: (v: boolean) => void | Promise<void> }) {
   const [devices, setDevices] = useState<PairedDevice[]>([]);
   const [pair, setPair] = useState<PairStart | null>(null);
   const [left, setLeft] = useState(0);       // seconds until the code expires
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [fwErr, setFwErr] = useState("");    // firewall/UAC problem on toggle
 
   const refresh = () =>
     api.pairDevices().then((r) => setDevices(r.devices)).catch(() => { /* backend down */ });
@@ -3881,6 +3893,15 @@ function CompanionSettings(props: { enabled: boolean; onEnabled: (v: boolean) =>
     try { await api.pairRevoke(id); refresh(); }
     catch (e) { setErr(`Couldn't remove that device: ${String(e)}`); }
   }
+  async function toggleEnabled(v: boolean) {
+    setFwErr("");
+    try {
+      await props.onEnabled(v);   // flips the setting + adjusts the firewall rule (UAC)
+    } catch (e) {
+      // The setting still flipped; the firewall step is what failed.
+      setFwErr(e instanceof Error ? e.message : String(e));
+    }
+  }
 
   return (
     <div className="companion">
@@ -3888,7 +3909,7 @@ function CompanionSettings(props: { enabled: boolean; onEnabled: (v: boolean) =>
         <input
           type="checkbox"
           checked={props.enabled}
-          onChange={(e) => props.onEnabled(e.target.checked)}
+          onChange={(e) => void toggleEnabled(e.target.checked)}
         />
         <span className="toggle-text">
           <span className="toggle-name">Allow companion devices on my network</span>
@@ -3896,11 +3917,19 @@ function CompanionSettings(props: { enabled: boolean; onEnabled: (v: boolean) =>
             Lets an Aether app on your phone reach this desktop over your LAN or a
             Tailscale network — it drives the backend running here, so it keeps
             your game data, keys, and subscription with nothing in the cloud. Off
-            by default. <b>Restart the app after enabling</b> so it starts
-            accepting connections; every device still has to be paired below.
+            by default. Enabling opens a firewall rule for the app (you'll get an
+            admin prompt), and you should <b>restart the app afterward</b> so it
+            starts accepting connections; every device still has to be paired below.
           </span>
         </span>
       </label>
+
+      {fwErr && (
+        <p className="pair-err">
+          {fwErr} Companion access is on, but until the firewall allows it your phone
+          won't reach this PC — toggle it off and on to try the prompt again.
+        </p>
+      )}
 
       {props.enabled && (
         <div className="companion-body">
@@ -4141,7 +4170,7 @@ function Settings(props: {
   refreshOnStart: boolean;
   onRefreshOnStart: (on: boolean) => void;
   companionEnabled: boolean;
-  onCompanionEnabled: (on: boolean) => void;
+  onCompanionEnabled: (on: boolean) => void | Promise<void>;
   closeToTray: boolean;
   onCloseToTray: (on: boolean) => void;
   autoCheckUpdates: boolean;

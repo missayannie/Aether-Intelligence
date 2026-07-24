@@ -82,6 +82,80 @@ fn set_close_to_tray(app: AppHandle, enabled: bool) {
 }
 
 // ---------------------------------------------------------------------------
+// Companion firewall rule. When companion access is on, the backend binds
+// off-loopback so a paired phone on the LAN can reach it — which Windows Firewall
+// blocks by default. Rather than opening the firewall for EVERY install, we add
+// the rule the moment the user enables companion access and remove it when they
+// disable: least privilege, lifecycle tied to the feature, so anyone who never
+// pairs a phone is never exposed. Scoped tight — this program only, TCP 8756,
+// Private+Domain profiles (never public Wi-Fi). Needs admin, so it raises one
+// UAC prompt.
+#[tauri::command]
+async fn set_companion_firewall(enabled: bool) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        firewall_apply(enabled)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = enabled;
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+fn firewall_apply(enabled: bool) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    const RULE: &str = "Aether Intelligence Companion";
+
+    // Program-scope the rule to our own backend binary, by full install path.
+    let backend = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("backend.exe")))
+        .ok_or("Couldn't locate the backend executable.")?;
+    let backend = backend.to_string_lossy().to_string();
+
+    // A .bat keeps netsh's spaced program path / rule name out of any shell
+    // quoting layer. Always delete first so re-enabling can't stack duplicates.
+    let mut script = format!(
+        "@echo off\r\nnetsh advfirewall firewall delete rule name=\"{RULE}\" >nul 2>&1\r\n"
+    );
+    if enabled {
+        script.push_str(&format!(
+            "netsh advfirewall firewall add rule name=\"{RULE}\" dir=in action=allow \
+             program=\"{backend}\" protocol=TCP localport=8756 profile=private,domain enable=yes\r\n"
+        ));
+    }
+    script.push_str("exit /b %errorlevel%\r\n");
+
+    let bat = std::env::temp_dir().join(format!("aether-fw-{}.bat", std::process::id()));
+    std::fs::write(&bat, script).map_err(|e| format!("Couldn't write the firewall script: {e}"))?;
+
+    // Elevate the .bat via PowerShell RunAs (one UAC prompt). -Wait -PassThru
+    // lets us read netsh's exit code; a declined UAC throws and we map it to 1223.
+    let ps = format!(
+        "try {{ $p = Start-Process -FilePath '{}' -Verb RunAs -Wait -PassThru \
+         -WindowStyle Hidden -ErrorAction Stop; exit $p.ExitCode }} catch {{ exit 1223 }}",
+        bat.to_string_lossy()
+    );
+    let status = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps.as_str()])
+        .creation_flags(CREATE_NO_WINDOW)
+        .status();
+    let _ = std::fs::remove_file(&bat);
+
+    match status {
+        Ok(s) if s.success() => Ok(()),
+        Ok(s) if s.code() == Some(1223) => {
+            Err("Administrator approval is needed to open the firewall — it was cancelled.".into())
+        }
+        Ok(s) => Err(format!("The firewall change failed (code {}).", s.code().unwrap_or(-1))),
+        Err(e) => Err(format!("Couldn't run the firewall command: {e}")),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Overlay hotkeys — editable in Settings. The plugin handler compares against
 // THIS state, so re-binding is just: unregister, register, swap the state.
 const HK_ASK_DEFAULT: &str = "Alt+Backquote";
@@ -462,6 +536,7 @@ pub fn run() {
             overlay::overlay_click_at,
             overlay::overlay_open_db,
             set_close_to_tray,
+            set_companion_firewall,
             set_overlay_hotkeys,
             install_update
         ])
