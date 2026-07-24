@@ -46,13 +46,12 @@ def _session() -> cffi.Session:
     return cffi.Session(impersonate="chrome", headers={"User-Agent": USER_AGENT})
 
 
-def notes_url(patch: str) -> tuple[str, str]:
-    """(label, url) of the notes for `patch`, e.g. "7.51" -> ("Patch 7.51 Notes", …).
+def list_patches() -> list[tuple[str, str]]:
+    """Every (label, url) patch-note entry in the official archive, NEWEST FIRST.
 
-    Falls back to the first listed patch when there's no exact match, so a version
-    string we can't map (or an archive layout change) still returns something usable
-    rather than nothing.
-    """
+    The archive lists patches in reverse-chronological order, so entry 0 is the
+    latest. This is the spine of the history search — it's how we find *which*
+    past patches to read without knowing the patch number in advance."""
     from bs4 import BeautifulSoup
 
     s = _session()
@@ -64,11 +63,26 @@ def notes_url(patch: str) -> tuple[str, str]:
 
     soup = BeautifulSoup(html, "html.parser")
     links: list[tuple[str, str]] = []
+    seen: set[str] = set()
     for a in soup.select("a[href]"):
         label = a.get_text(" ", strip=True)
         if re.match(r"^Patch\s+[\d.]+\s+Notes$", label, re.I):
             href = a.get("href") or ""
-            links.append((label, href if href.startswith("http") else BASE + href))
+            url = href if href.startswith("http") else BASE + href
+            if url not in seen:
+                seen.add(url)
+                links.append((label, url))
+    return links
+
+
+def notes_url(patch: str) -> tuple[str, str]:
+    """(label, url) of the notes for `patch`, e.g. "7.51" -> ("Patch 7.51 Notes", …).
+
+    Falls back to the first listed patch when there's no exact match, so a version
+    string we can't map (or an archive layout change) still returns something usable
+    rather than nothing.
+    """
+    links = list_patches()
     if not links:
         return "", ""
     if patch:
@@ -121,18 +135,8 @@ def _sections(lines: list[str]) -> list[str]:
     return out
 
 
-def search(patch: str, topic: str, context: int = 2, limit: int = 12) -> dict:
-    """Lines mentioning `topic` in this patch's notes, with surrounding context.
-
-    An empty result is a REAL answer — "this patch didn't touch it" is exactly the
-    signal that makes a re-check unnecessary — so callers must not treat it as a
-    failed lookup.
-    """
-    label, url = notes_url(patch)
-    if not url:
-        return {"found": False, "note": "Could not read the official patch note archive."}
-
-    text = _fetch_text(url)
+def _excerpts(text: str, topic: str, context: int = 2, limit: int = 12) -> list[Excerpt]:
+    """Lines mentioning `topic`, each with `context` lines of surrounding text."""
     lines = text.split("\n")
     pat = re.compile(re.escape(topic.strip()), re.I)
     hits: list[Excerpt] = []
@@ -148,9 +152,74 @@ def search(patch: str, topic: str, context: int = 2, limit: int = 12) -> dict:
         hits.append(Excerpt(heading=lines[i].strip()[:80], text=chunk[:500]))
         if len(hits) >= limit:
             break
+    return hits
 
+
+def search(patch: str, topic: str, context: int = 2, limit: int = 12) -> dict:
+    """Lines mentioning `topic` in ONE patch's notes, with surrounding context.
+
+    An empty result is a REAL answer — "this patch didn't touch it" is exactly the
+    signal that makes a re-check unnecessary — so callers must not treat it as a
+    failed lookup.
+    """
+    label, url = notes_url(patch)
+    if not url:
+        return {"found": False, "note": "Could not read the official patch note archive."}
+    hits = _excerpts(_fetch_text(url), topic, context, limit)
     return {
         "found": True, "patch": label, "url": url, "topic": topic,
         "mentioned": bool(hits),
         "excerpts": [{"heading": h.heading, "text": h.text} for h in hits],
+    }
+
+
+def history(topic: str, max_patches: int = 50, per_patch: int = 4) -> dict:
+    """How `topic` changed ACROSS past patches — its official change history.
+
+    The rest of the app only knows the CURRENT patch, so this is the one way to
+    answer "how/when did X change", "X used to Y", or "why is X different from
+    what I remember". Reads each patch's notes (cached 30d — a published note never
+    changes) in parallel and returns the patches that mention the topic, newest
+    first, with excerpts. The first call for cold patches costs a few seconds; every
+    call after is served from cache.
+    """
+    topic = (topic or "").strip()
+    if not topic:
+        return {"found": False, "note": "No topic given."}
+    patches = list_patches()
+    if not patches:
+        return {"found": False, "note": "Could not read the official patch note archive."}
+    patches = patches[:max_patches]
+
+    import concurrent.futures as _cf
+
+    def _one(entry: tuple[str, str]) -> dict | None:
+        label, url = entry
+        try:
+            hits = _excerpts(_fetch_text(url), topic, context=1, limit=per_patch)
+        except Exception:
+            return None                  # one unreachable note must not sink the sweep
+        if not hits:
+            return None
+        return {"patch": label, "url": url,
+                "excerpts": [{"heading": h.heading, "text": h.text} for h in hits]}
+
+    # Bounded concurrency — enough to keep the first (cold) sweep tolerable without
+    # hammering the WAF. ThreadPoolExecutor.map preserves order, so results stay
+    # newest-first.
+    changes: list[dict] = []
+    with _cf.ThreadPoolExecutor(max_workers=5) as ex:
+        for r in ex.map(_one, patches):
+            if r:
+                changes.append(r)
+
+    return {
+        "found": True,
+        "topic": topic,
+        "patches_searched": len(patches),
+        "changed_in": [c["patch"] for c in changes],
+        "changes": changes,
+        "note": ("" if changes else
+                 "No patch in the archive mentions this by that exact name — try the "
+                 "precise in-game name of the ability/job/item."),
     }
