@@ -13,7 +13,10 @@ import { record, type Record_ } from "../lib/db";
 
 type Field = { label: string; value: string };
 type Ref = { kind: string; id: string | number; name: string; icon?: string; sub?: string };
-type LinkGroup = { group: string; refs: Ref[] };
+// `defaultKind` covers the item route's ref lists, which carry {id, name} with
+// no kind of their own. Most are items; vendors are NPCs, and routing those to
+// /db/item would look up whatever item shares the number.
+type LinkGroup = { group: string; refs: Ref[]; defaultKind?: string };
 
 const str = (v: unknown): string => (v == null || v === "" ? "" : String(v));
 
@@ -24,7 +27,8 @@ function itemFields(r: Record_): Field[] {
   push("Item level", r.item_level);
   push("Equippable by", Array.isArray(r.category) ? (r.category as string[]).join(", ") : r.category);
   push("Patch", r.patch);
-  push("Materia slots", r.materia_slots);
+  // Zero materia slots is the default for most items — a row saying "0" is noise.
+  push("Materia slots", Number(r.materia_slots) > 0 ? r.materia_slots : "");
   push("Sells for", r.sell_price ? `${r.sell_price} gil` : "");
 
   // Stats arrive as data ({"Dexterity": 146, …}) rather than prose.
@@ -33,24 +37,46 @@ function itemFields(r: Record_): Field[] {
     for (const [k, v] of Object.entries(attrs as Record<string, unknown>)) push(k, v);
   }
 
+  // Universalis, fetched live and uncached by the backend. The keys are
+  // {world_or_dc, lowest, average, world, listings} — not a price_per_unit.
   const market = r.market as Record<string, unknown> | null | undefined;
   if (market && typeof market === "object") {
-    const price = str(market.price_per_unit ?? market.price);
-    if (price) push("Cheapest listing", `${price} gil${market.world ? ` (${market.world})` : ""}`);
+    const low = str(market.lowest);
+    if (low) push("Cheapest listing", `${low} gil${market.world ? ` on ${market.world}` : ""}`);
+    const listings = str(market.listings);
+    if (listings) push("Listings", `${listings}${market.world_or_dc ? ` on ${market.world_or_dc}` : ""}`);
   } else if (r.tradeable === false) {
     push("Market", "Untradeable");
   }
   return out;
 }
 
+type Node = {
+  id?: string | number; name?: string; zone?: string; level?: number;
+  type?: string; x?: number; y?: number; uptime_minutes?: number; folklore?: string;
+};
+
+/** Where an item is gathered. The phone has no map, so this reads as text —
+ *  zone plus the in-game coordinates you'd type into a marker. */
+function nodeLines(r: Record_): { name: string; detail: string }[] {
+  const nodes = Array.isArray(r.nodes) ? (r.nodes as Node[]) : [];
+  return nodes.map((n) => {
+    const where = [n.zone, n.x != null && n.y != null ? `(${n.x}, ${n.y})` : ""].filter(Boolean).join(" ");
+    const what = [n.type, n.level ? `Lv ${n.level}` : "", n.uptime_minutes ? `${n.uptime_minutes} min` : ""]
+      .filter(Boolean).join(" · ");
+    return { name: str(n.name) || str(n.zone) || "Node", detail: [where, what].filter(Boolean).join(" — ") };
+  });
+}
+
 function itemLinks(r: Record_): LinkGroup[] {
   const groups: LinkGroup[] = [];
-  const add = (group: string, refs: unknown) => {
-    if (Array.isArray(refs) && refs.length) groups.push({ group, refs: refs as Ref[] });
+  const add = (group: string, refs: unknown, defaultKind = "item") => {
+    if (Array.isArray(refs) && refs.length) groups.push({ group, refs: refs as Ref[], defaultKind });
   };
   add("Upgrades to", r.upgrades);
   add("Downgrades from", r.downgrades);
   add("Ingredient of", r.ingredient_of);
+  add("Sold by", r.vendors, "npc");
   return groups;
 }
 
@@ -92,6 +118,14 @@ export default function DbRecord({
   const sub = str(rec?.sub);
   const description = str(rec?.description);
   const notFound = rec !== null && rec.found === false;
+  const nodes = rec && isItem ? nodeLines(rec) : [];
+
+  // Non-item records carry a single {zone, x, y} instead of a node list. No map
+  // on the phone, so it renders as coordinates you can act on in game.
+  const loc = rec && !isItem ? (rec.location as Node | null) : null;
+  const locText = loc
+    ? [loc.zone, loc.x != null && loc.y != null ? `(${loc.x}, ${loc.y})` : ""].filter(Boolean).join(" ")
+    : "";
 
   return (
     <div className="db">
@@ -127,8 +161,14 @@ export default function DbRecord({
 
             {description && <p className="rec-desc">{description}</p>}
 
-            {fields.length > 0 && (
+            {(fields.length > 0 || locText) && (
               <dl className="rec-fields">
+                {locText && (
+                  <div className="rec-field">
+                    <dt>Location</dt>
+                    <dd>{locText}</dd>
+                  </div>
+                )}
                 {fields.map((f, i) => (
                   <div className="rec-field" key={f.label + i}>
                     <dt>{f.label}</dt>
@@ -136,6 +176,22 @@ export default function DbRecord({
                   </div>
                 ))}
               </dl>
+            )}
+
+            {nodes.length > 0 && (
+              <section className="rec-links">
+                <h3>Gathered from</h3>
+                <ul className="rows">
+                  {nodes.map((n, i) => (
+                    <li key={n.name + i}>
+                      <div className="row static stack">
+                        <span className="row-name">{n.name}</span>
+                        {n.detail && <span className="row-sub">{n.detail}</span>}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </section>
             )}
 
             {links.map((g, i) => (
@@ -146,7 +202,7 @@ export default function DbRecord({
                     <li key={`${ref.kind}-${ref.id}`}>
                       <button
                         className="row"
-                        onClick={() => onOpenRecord(ref.kind || "item", ref.id, ref.name)}
+                        onClick={() => onOpenRecord(ref.kind || g.defaultKind || "item", ref.id, ref.name)}
                       >
                         <DbIcon url={ref.icon} className="row-icon" />
                         <span className="row-name">{ref.name}</span>

@@ -3,7 +3,6 @@
 // Every route already ships in the desktop backend (v2.0.0) behind the companion
 // token gate, so this file is a thin typed client plus a cache. Nothing here
 // needs a backend change.
-import { Preferences } from "@capacitor/preferences";
 import { apiGet } from "./client";
 
 // gdb.BROWSE_KINDS / BROWSE_LABEL, mirrored. Order matches the desktop's tab.
@@ -41,27 +40,17 @@ export type Record_ = Record<string, unknown>;
 
 // ---------------------------------------------------------------- cache
 //
-// Browse responses are pure game data — the backend's own TTL is 7 days and keys
-// freshness off the game-data hash rather than a clock, so caching between
-// patches is safe. Session memory covers every kind; Items also persists,
-// because it's the only genuinely expensive one (~40k rows).
-
+// In-memory for the session only. Persisting was tempting for Items (~40k rows)
+// but measured out badly: the payload is 5.4MB, and @capacitor/preferences is
+// UserDefaults on iOS — which is read into memory at app launch, so storing it
+// would inflate launch memory for the life of the install. Meanwhile the
+// backend memoises its own build, so a refetch is ~0.4s on the LAN. Session
+// memory gets nearly all the benefit at none of the cost.
 const memo = new Map<string, Browse>();
-const ITEM_CACHE_KEY = "aether.db.items";
 
-async function persistedItems(): Promise<Browse | null> {
-  try {
-    const { value } = await Preferences.get({ key: ITEM_CACHE_KEY });
-    return value ? (JSON.parse(value) as Browse) : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Drop the stored Items index (the Refresh control on that list). */
+/** Drop the cached Items index (the Refresh control on that list). */
 export async function clearItemCache(): Promise<void> {
   memo.delete("item");
-  await Preferences.remove({ key: ITEM_CACHE_KEY }).catch(() => {});
 }
 
 // ---------------------------------------------------------------- calls
@@ -71,20 +60,11 @@ export async function browse(kind: Kind, force = false): Promise<Browse> {
   if (!force) {
     const hit = memo.get(kind);
     if (hit) return hit;
-    if (kind === "item") {
-      const stored = await persistedItems();
-      if (stored) { memo.set(kind, stored); return stored; }
-    }
   }
   const out = await apiGet<Browse>(`/db/browse?kind=${encodeURIComponent(kind)}`);
   // A truncated build (the backend flags `partial`) is usable but must not be
   // cached, or a bad network moment sticks around for the session.
-  if (!out.partial) {
-    memo.set(kind, out);
-    if (kind === "item") {
-      await Preferences.set({ key: ITEM_CACHE_KEY, value: JSON.stringify(out) }).catch(() => {});
-    }
-  }
+  if (!out.partial) memo.set(kind, out);
   return out;
 }
 

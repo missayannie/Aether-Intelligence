@@ -210,6 +210,13 @@ textarea.link-in {
   padding: 12px 2px; cursor: pointer;
 }
 .row:active { background: var(--bg1); }
+/* Non-navigable rows (gathering nodes — there's no node record behind them). */
+.row.static { cursor: default; }
+.row.static:active { background: none; }
+/* Long detail text (zone + coords + uptime) would otherwise squeeze the name
+   into a narrow wrapping column beside it — stack them instead. */
+.row.stack { flex-direction: column; align-items: flex-start; gap: 2px; }
+.row.stack .row-sub { flex: 1 1 auto; }
 .row-name { flex: 1; min-width: 0; }
 .row-sub, .row-tag { color: var(--muted); font-size: 12px; flex: none; }
 .row-tag { border: 1px solid var(--border); border-radius: 999px; padding: 2px 8px; }
