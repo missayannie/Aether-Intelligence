@@ -151,3 +151,79 @@ textarea.link-in {
 }
 .send:disabled { opacity: .4; }
 .send.stop { background: transparent; border: 1px solid var(--danger); color: var(--danger); font-size: 13px; }
+
+/* --- Tabs --- */
+.app { display: flex; flex-direction: column; height: 100%; }
+/* Panes are hidden, not unmounted — `hidden` must beat the flex display below. */
+.tabpane { flex: 1; min-height: 0; overflow-y: auto; }
+.tabpane[hidden] { display: none; }
+.tabbar {
+  flex: none; display: flex; border-top: 1px solid var(--border); background: var(--bg1);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.tab {
+  flex: 1; background: none; border: none; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  padding: 9px 0 7px; font-size: 11px; color: var(--muted);
+}
+.tab.on { color: var(--accent); }
+.tab-mark { font-size: 17px; line-height: 1; }
+
+/* --- Database --- */
+.db { display: flex; flex-direction: column; height: 100%; max-width: 620px; margin: 0 auto; }
+.db-search { flex: none; padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--bg1); }
+/* First screen in its pane has no header above it — clear the notch. */
+.db > .db-search:first-child { padding-top: max(10px, env(safe-area-inset-top)); }
+.db-in { width: 100%; font-family: inherit; font-size: 15px; padding: 10px 12px; }
+.db-in:disabled { opacity: .55; }
+.db-body { flex: 1; overflow-y: auto; padding: 12px 14px 20px; }
+.db-err { color: var(--danger); font-size: 13px; margin-bottom: 10px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.db-err .retry { padding: 7px 12px; font-size: 13px; }
+.db-refresh {
+  margin-left: auto; background: none; border: 1px solid var(--border);
+  border-radius: 999px; color: var(--muted); font-size: 12px; padding: 4px 11px; cursor: pointer;
+}
+
+.kind-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 9px; }
+.kind {
+  background: var(--bg1); border: 1px solid var(--border); border-radius: 12px;
+  color: var(--text); font-size: 14.5px; font-weight: 560; text-align: left;
+  padding: 16px 14px; cursor: pointer;
+}
+.kind:active { background: var(--bg2); }
+
+.groups, .rows { list-style: none; margin: 0; padding: 0; }
+.group {
+  width: 100%; display: flex; align-items: center; gap: 9px;
+  background: none; border: none; border-bottom: 1px solid var(--border);
+  color: var(--text); font-size: 14.5px; font-weight: 560; text-align: left;
+  padding: 13px 2px; cursor: pointer;
+}
+.group-caret { color: var(--muted); font-size: 11px; width: 11px; flex: none; }
+.group-name { flex: 1; min-width: 0; }
+.group-count { color: var(--muted); font-size: 12.5px; flex: none; }
+.rows.nested { padding-left: 20px; }
+.row {
+  width: 100%; display: flex; align-items: center; gap: 9px;
+  background: none; border: none; border-bottom: 1px solid var(--border);
+  color: var(--text); font-size: 14.5px; text-align: left;
+  padding: 12px 2px; cursor: pointer;
+}
+.row:active { background: var(--bg1); }
+.row-name { flex: 1; min-width: 0; }
+.row-sub, .row-tag { color: var(--muted); font-size: 12px; flex: none; }
+.row-tag { border: 1px solid var(--border); border-radius: 999px; padding: 2px 8px; }
+.row-icon { width: 26px; height: 26px; flex: none; border-radius: 5px; }
+
+.rec-head { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
+.rec-icon { width: 46px; height: 46px; flex: none; border-radius: 8px; }
+.rec-name { margin: 0; font-size: 18px; font-weight: 650; }
+.rec-sub { margin: 3px 0 0; color: var(--muted); font-size: 13px; }
+.rec-desc { margin: 0 0 14px; font-size: 14px; line-height: 1.55; color: var(--text); }
+.rec-fields { margin: 0 0 16px; display: flex; flex-direction: column; }
+.rec-field { display: flex; gap: 12px; padding: 8px 2px; border-bottom: 1px solid var(--border); }
+.rec-field dt { color: var(--muted); font-size: 13px; flex: none; min-width: 42%; }
+.rec-field dd { margin: 0; font-size: 13.5px; flex: 1; }
+.rec-links { margin-bottom: 16px; }
+.rec-links h3 { font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin: 0 0 4px; font-weight: 600; }
+.rec-ext { display: inline-block; margin-top: 4px; color: var(--accent); font-size: 13px; text-decoration: none; }

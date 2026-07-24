@@ -43,6 +43,17 @@ function authHeaders(extra: Record<string, string> = {}): Record<string, string>
   return _token ? { Authorization: `Bearer ${_token}`, ...extra } : extra;
 }
 
+/** Authed GET against the current desktop, returning parsed JSON.
+ *
+ * The generic escape hatch for read-only routes that need no bespoke handling —
+ * the GarlandDB browser is built entirely on it. `path` starts with "/".
+ * Optionally abortable, so a superseded search can cancel in flight. */
+export async function apiGet<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const r = await fetch(`${_base}${path}`, { headers: authHeaders(), signal });
+  if (!r.ok) throw new Error(`${path.split("?")[0]}: ${r.status}`);
+  return (await r.json()) as T;
+}
+
 /** Roaming reconnect: try each candidate host until one answers `/health`, then
  * point the client at it. Returns the working base, or null if none respond
  * (desktop asleep / off-network). The token is applied on success. */

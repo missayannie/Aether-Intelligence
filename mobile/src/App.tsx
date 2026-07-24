@@ -4,6 +4,8 @@ import Pair from "./screens/Pair";
 import Paired from "./screens/Paired";
 import Chat from "./screens/Chat";
 import Offline from "./screens/Offline";
+import DatabaseTab from "./screens/DatabaseTab";
+import TabBar, { type Tab } from "./components/TabBar";
 import { claimFromUri, type Claimed } from "./lib/pairing";
 import { loadConnection, saveConnection, type Connection } from "./lib/store";
 import { reconnect, setConnection } from "./lib/client";
@@ -17,6 +19,7 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [status, setStatus] = useState<Status>("connecting");
   const [view, setView] = useState<"home" | "chat">("home");
+  const [tab, setTab] = useState<Tab>("ask");
   const [ready, setReady] = useState(false);
   const [stored, setStored] = useState(false); // a saved pairing exists
   const connecting = useRef(false); // guard against overlapping reconnects
@@ -100,15 +103,27 @@ export default function App() {
   if (status === "offline") {
     return <Offline serverName={session.serverName} onRetry={retry} onForget={() => { void forget(); }} />;
   }
-  if (view === "chat") {
-    return <Chat serverName={session.serverName} onBack={() => setView("home")} />;
-  }
+  // Both tabs stay MOUNTED — hidden, not unmounted — so switching keeps a
+  // half-typed question, a scroll position, and the Database tab's own
+  // navigation stack intact.
   return (
-    <Paired
-      serverName={session.serverName}
-      host={session.host}
-      onAsk={() => setView("chat")}
-      onForget={() => { void forget(); }}
-    />
+    <div className="app">
+      <div className="tabpane" hidden={tab !== "ask"}>
+        {view === "chat" ? (
+          <Chat serverName={session.serverName} onBack={() => setView("home")} />
+        ) : (
+          <Paired
+            serverName={session.serverName}
+            host={session.host}
+            onAsk={() => setView("chat")}
+            onForget={() => { void forget(); }}
+          />
+        )}
+      </div>
+      <div className="tabpane" hidden={tab !== "db"}>
+        <DatabaseTab />
+      </div>
+      <TabBar tab={tab} onTab={setTab} />
+    </div>
   );
 }
