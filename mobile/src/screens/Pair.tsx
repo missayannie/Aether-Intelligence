@@ -1,11 +1,17 @@
 import { useState } from "react";
+import { Capacitor } from "@capacitor/core";
+import { BarcodeScanner } from "@capacitor-mlkit/barcode-scanning";
 import { claimFromUri, type Claimed } from "../lib/pairing";
 
-// NATIVE HOOK (Mac): replace scan() with @capacitor-mlkit/barcode-scanning.
-// It returns the QR's text (an `aether://pair?…` link), which you hand straight
-// to claimFromUri — the exact same path the pasted link takes below.
+// Native QR scan. Returns the QR's text (an `aether://pair?…` link), which goes
+// straight to claimFromUri — the exact same path the pasted link takes below.
+// On the web target there's no camera, so we fall through to the paste field.
 async function scanQr(): Promise<string | null> {
-  return null; // web/dev: no camera — use the paste field
+  if (!Capacitor.isNativePlatform()) return null;
+  const perm = await BarcodeScanner.requestPermissions();
+  if (perm.camera !== "granted" && perm.camera !== "limited") return null;
+  const { barcodes } = await BarcodeScanner.scan();
+  return barcodes[0]?.rawValue ?? null;
 }
 
 export default function Pair({ onPaired }: { onPaired: (c: Claimed) => void }) {
@@ -30,9 +36,20 @@ export default function Pair({ onPaired }: { onPaired: (c: Claimed) => void }) {
   }
 
   async function onScan() {
-    const text = await scanQr();
-    if (text) void pair(text);
-    else setErr("Camera scanning is on the installed app — for now paste the link below.");
+    setErr("");
+    try {
+      const text = await scanQr();
+      if (text) { void pair(text); return; }
+      // No text: camera denied, nothing scanned, or the web target (no camera).
+      setErr(
+        Capacitor.isNativePlatform()
+          ? "Nothing scanned. Allow camera access in Settings, or paste the link below."
+          : "Camera scanning is on the installed app — for now paste the link below.",
+      );
+    } catch {
+      // Scanner dismissed or unavailable — the paste field is always the fallback.
+      setErr("Couldn't open the camera. Paste the pairing link below instead.");
+    }
   }
 
   return (

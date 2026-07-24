@@ -13,6 +13,8 @@
     "cap:open:ios": "cap open ios"
   },
   "dependencies": {
+    "@aparajita/capacitor-secure-storage": "^6.0.1",
+    "@capacitor-mlkit/barcode-scanning": "^6.2.0",
     "@capacitor/app": "^6.0.2",
     "@capacitor/core": "^6.1.2",
     "@capacitor/ios": "^6.1.2",

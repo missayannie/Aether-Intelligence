@@ -1,13 +1,12 @@
 // Connection persistence.
 //
-// Uses @capacitor/preferences (UserDefaults on iOS, localStorage on the web),
-// so it works in the browser during development and on device unchanged.
-//
-// NOTE for Phase 1: the device TOKEN is a long-lived credential and should move
-// to a Keychain-backed secure-storage plugin before it's real. The shape here
-// is deliberately a single object so that swap touches only this file — split
-// the token into secure storage, keep host/serverId in Preferences.
+// Split by sensitivity: host/serverId/serverName are ordinary settings and live
+// in @capacitor/preferences (UserDefaults on iOS, localStorage on the web); the
+// device TOKEN is a long-lived credential and lives in the iOS Keychain via
+// secure.ts. The `Connection` shape is unchanged to the rest of the app — this
+// file is the only place that knows the two halves are stored differently.
 import { Preferences } from "@capacitor/preferences";
+import { getSecret, removeSecret, setSecret } from "./secure";
 
 export type Connection = {
   host: string;        // e.g. "http://desktop.tailnet.ts.net:8756"
@@ -17,23 +16,33 @@ export type Connection = {
 };
 
 const KEY = "aether.connection";
+const TOKEN_KEY = "aether.token";
 
 export async function saveConnection(c: Connection): Promise<void> {
-  await Preferences.set({ key: KEY, value: JSON.stringify(c) });
+  const { token, ...rest } = c;
+  await Preferences.set({ key: KEY, value: JSON.stringify(rest) });
+  if (token) await setSecret(TOKEN_KEY, token);
+  else await removeSecret(TOKEN_KEY).catch(() => {});
 }
 
 export async function loadConnection(): Promise<Connection | null> {
   const { value } = await Preferences.get({ key: KEY });
   if (!value) return null;
+  let rest: Omit<Connection, "token">;
   try {
-    return JSON.parse(value) as Connection;
+    rest = JSON.parse(value) as Omit<Connection, "token">;
   } catch {
     return null;
   }
+  // A missing/unreadable Keychain entry means "not paired" rather than a hard
+  // failure — the app falls back to the Pair screen and the user re-pairs.
+  const token = await getSecret(TOKEN_KEY).catch(() => null);
+  return { ...rest, token: token ?? "" };
 }
 
 export async function clearConnection(): Promise<void> {
   await Preferences.remove({ key: KEY });
+  await removeSecret(TOKEN_KEY).catch(() => {});
 }
 
 // Stable per-install id, sent with /pair/claim so re-pairing replaces this
