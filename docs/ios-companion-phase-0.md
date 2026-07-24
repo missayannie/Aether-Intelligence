@@ -121,11 +121,16 @@ device and to open pairing links later. Add inside the top-level `<dict>`:
   </dict>
 </array>
 
-<!-- 2. Allow plaintext HTTP to local/LAN addresses (Tailscale encrypts at the
-     network layer; bare LAN is plain http). -->
+<!-- 2. Allow plaintext HTTP to the desktop. The companion talks plain http to a
+     user-entered LAN or Tailscale host, so ATS must allow arbitrary cleartext.
+     IMPORTANT: do NOT use NSAllowsLocalNetworking alone — it covers RFC1918 LAN
+     ranges (192.168.x etc.) but NOT Tailscale's 100.64.0.0/10 (CGNAT) range, so
+     the app silently fails to reach a 100.x address while Safari (no ATS) works.
+     NSAllowsArbitraryLoads is the right call here: a personal/sideloaded app whose
+     transport is either the user's own LAN or a Tailscale WireGuard tunnel. -->
 <key>NSAppTransportSecurity</key>
 <dict>
-  <key>NSAllowsLocalNetworking</key>
+  <key>NSAllowsArbitraryLoads</key>
   <true/>
 </dict>
 
@@ -177,14 +182,22 @@ If the last two pass, report success and stop. Do not start Phase 1.
 
 ## Troubleshooting
 
-- **"Can't reach it" on device but works in the desktop browser.** The phone is
-  hitting a different network path. Confirm the phone is on the same Wi-Fi (not
-  cellular) or that both devices are on the same tailnet; try the Tailscale name
-  instead of the LAN IP. Also confirm the desktop was **restarted** after enabling
-  companion access (the bind only opens on restart).
-- **iOS "Local Network" prompt never appears / connection silently fails.** Ensure
-  `NSLocalNetworkUsageDescription` and `NSAllowsLocalNetworking` are in Info.plist
-  and you re-ran `npx cap sync ios`.
+- **The app says "can't reach it" but Safari on the SAME phone loads
+  `http://<host>:8756/health` fine.** This is the tell-tale ATS signature: the
+  network path is good; iOS is blocking the *app's* cleartext request. Cause: the
+  host is a Tailscale `100.x` (CGNAT) address, which `NSAllowsLocalNetworking` does
+  **not** cover. Fix: use `NSAllowsArbitraryLoads` (step 4, addition 2), re-run
+  `npx cap sync ios`, and rebuild. This was the real Phase 0 blocker in practice.
+- **"Can't reach it" AND Safari on the phone also can't reach it.** Now it's the
+  network. Confirm the phone is on the same Wi-Fi (not cellular) or both are on the
+  same tailnet; verify the typed address is the *desktop's* host (not the phone's),
+  the desktop was **restarted** after enabling companion access (the bind only opens
+  on restart), and a Windows Firewall inbound rule allows TCP 8756 on the profile
+  that matches the interface (Tailscale = Private; a Public LAN needs the network set
+  to Private or the rule scoped accordingly).
+- **iOS "Local Network" prompt never appears.** Ensure `NSLocalNetworkUsageDescription`
+  is in Info.plist and you re-ran `npx cap sync ios`. (Traffic to a Tailscale address
+  goes via the VPN interface and may not trigger this prompt at all — that's fine.)
 - **App loads blank / white.** Check `webDir` is `dist` and `npm run build` ran
   before `cap sync`. `base: "./"` in vite.config.ts is required (relative asset URLs).
 - **CocoaPods errors on `cap add ios`.** `cd mobile/ios/App && pod install --repo-update`.
