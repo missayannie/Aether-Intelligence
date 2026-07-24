@@ -2,16 +2,17 @@ import { useEffect, useState } from "react";
 import { App as CapApp } from "@capacitor/app";
 import Pair from "./screens/Pair";
 import Paired from "./screens/Paired";
+import Chat from "./screens/Chat";
 import { claimFromUri, type Claimed } from "./lib/pairing";
 import { loadConnection } from "./lib/store";
 import { setConnection } from "./lib/client";
 
-// Phase 1: pair, then show the paired status. If a token is already stored we
-// skip straight to Paired; otherwise Pair. Phase 2 swaps Paired for the chat UI.
+// Not paired -> Pair. Paired -> Paired (home) with a button into Chat (Phase 2).
 type Session = { serverName: string; host: string };
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
+  const [view, setView] = useState<"home" | "chat">("home");
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
@@ -45,11 +46,21 @@ export default function App() {
 
   if (!ready) return null;
 
-  const onPaired = (c: Claimed) => setSession({ serverName: c.serverName, host: c.host });
+  const onPaired = (c: Claimed) => {
+    setSession({ serverName: c.serverName, host: c.host });
+    setView("home");
+  };
 
-  return session ? (
-    <Paired serverName={session.serverName} host={session.host} onForget={() => setSession(null)} />
-  ) : (
-    <Pair onPaired={onPaired} />
+  if (!session) return <Pair onPaired={onPaired} />;
+  if (view === "chat") {
+    return <Chat serverName={session.serverName} onBack={() => setView("home")} />;
+  }
+  return (
+    <Paired
+      serverName={session.serverName}
+      host={session.host}
+      onAsk={() => setView("chat")}
+      onForget={() => { setSession(null); setView("home"); }}
+    />
   );
 }
